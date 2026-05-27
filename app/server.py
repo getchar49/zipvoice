@@ -67,6 +67,9 @@ async def job_status(job_id: str):
         
     resp = JobStatusResponse(job_id=j.id, status=j.status, progress=j.progress)
     
+    if j.status in ["done", "error", "cancelled"] and j.finished_at and j.created_at:
+        conversion_time = (j.finished_at - j.created_at).total_seconds()
+        resp.conversion_time = conversion_time
     if j.status == "done":
         ext = "mp3" if j.out_wav_path.endswith(".mp3") else "wav"
         resp.file_path = f"/files/{job_id}.{ext}"

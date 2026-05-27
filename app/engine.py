@@ -61,7 +61,9 @@ class ZipVoiceEngine:
 
         # Tokenizer
         if TOKENIZER == "espeak":
-            self.tokenizer = EspeakTokenizer(token_file=token_file, lang=LANG_TOKENIZER)
+            #self.tokenizer = EspeakTokenizer(token_file=token_file, lang=LANG_TOKENIZER)
+            from app.tokenizer import LoggingEspeakTokenizer
+            self.tokenizer = LoggingEspeakTokenizer(token_file=token_file, lang=LANG_TOKENIZER)
         else:
             self.tokenizer = EmiliaTokenizer(token_file=token_file)
 

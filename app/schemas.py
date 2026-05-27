@@ -22,3 +22,4 @@ class JobStatusResponse(BaseModel):
     file_path: Optional[str] = None
     audio_url: Optional[str] = None
     error: Optional[str] = None
+    conversion_time: Optional[float] = Field(None, description="Time taken for conversion in seconds")
