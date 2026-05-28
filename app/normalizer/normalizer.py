@@ -92,7 +92,22 @@ class TextNormalizer():
         return ' '.join(new_text)
 
     def remove_special_characters_v2(self, input_str):
-        return re.sub(r'[^\w\s,.?!;-]', ' ', input_str)
+        # Preserve <> brackets (used for bracket-aware inference markers)
+        # Preserve - (handled separately by normalize_remaining_dash)
+        return re.sub(r'[^\w\s,.?!;<>-]', ' ', input_str)
+
+    def normalize_remaining_dash(self, input_str):
+        """
+        Handle remaining '-' dashes that weren't caught by earlier dash/range handlers.
+        Context-aware: between letters → remove (compound word), standalone → remove.
+        This runs AFTER dash_range, date_range, time_range have already handled their cases.
+        """
+        # Between two words (e.g., "text-to-speech"): replace with space
+        input_str = re.sub(r'(?<=[a-zA-ZÀ-ỹ])\s*-\s*(?=[a-zA-ZÀ-ỹ])', ' ', input_str)
+        # Standalone dashes or dashes adjacent to non-word chars: remove
+        input_str = re.sub(r'(?<!\w)-(?!\w)', ' ', input_str)
+        input_str = re.sub(r'(?<=\s)-(?=\s)', ' ', input_str)
+        return input_str
 
     def remove_emoji(self, input_str):
         """
@@ -286,9 +301,10 @@ class TextNormalizer():
         for key, value in VERBATIM.items():
             # Escape the key for regex and match it even when adjacent to punctuation
             escaped_key = _re.escape(key.strip())
-            # Match the symbol when surrounded by space, punctuation, or start/end of string
+            # Match the symbol when preceded by whitespace, start of string, or non-alphanumeric
+            # and followed by whitespace, punctuation, alphanumeric, or end of string
             input_str = _re.sub(
-                r'(?<=\s)' + escaped_key + r'(?=[\s,.:;!?\)\]\}]|$)',
+                r'(?:(?<=\s)|(?<=^)|(?<=[^\w]))' + escaped_key + r'(?=[\s,.:;!?\)\]\}\w]|$)',
                 ' ' + value.strip() + ' ',
                 input_str
             )

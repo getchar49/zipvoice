@@ -33,6 +33,44 @@ def setup_logging():
 # Initialize logger
 logger = setup_logging()
 
+def pre_normalize_special_formats(text):
+    """
+    Pre-process text to handle formats that the existing rule-based normalizer
+    doesn't handle well. Runs BEFORE the main normalize() pipeline.
+    """
+    # 1. Unicode math operators → ASCII equivalents (so downstream handlers work)
+    text = text.replace('×', 'x')   # multiplication sign
+    text = text.replace('÷', '/')   # division sign
+    text = text.replace('−', '-')   # minus sign (unicode) → hyphen-minus
+    text = text.replace('≤', '<=')
+    text = text.replace('≥', '>=')
+    text = text.replace('≠', '!=')
+    text = text.replace('±', '+-')
+
+    # 2. Scientific notation: 3.5×10^6 → ba chấm năm nhân mười mũ sáu
+    # (After × → x above, this becomes 3.5x10^6)
+    def sci_notation_to_words(m):
+        base = m.group(1)       # e.g. "3.5" or "3"
+        exponent = m.group(2)   # e.g. "6"
+        return f'{base} nhân mười mũ {exponent}'
+    text = re.sub(r'(\d+(?:[.,]\d+)?)\s*[xX]\s*10\^(\d+)', sci_notation_to_words, text)
+
+    # 3. Currency: $1,234.5678 (international format with comma as thousand sep)
+    # Convert to a form the VN normalizer can handle
+    def currency_to_words(m):
+        symbol = m.group(1)     # e.g. "$" or "€"
+        number = m.group(2)     # e.g. "1,234.5678" or "0.000045"
+        currency_names = {'$': 'đô la', '€': 'ơ rô', '£': 'bảng', '¥': 'yên'}
+        currency_name = currency_names.get(symbol, symbol)
+        # Remove thousand separators (commas in international format)
+        # but keep the decimal point
+        clean_number = number.replace(',', '')
+        return f'{currency_name} {clean_number}'
+    text = re.sub(r'([\$€£¥])(\d[\d,]*(?:\.\d+)?)', currency_to_words, text)
+
+    return text
+
+
 def normalize(text):
     normalizer = TextNormalizer()
     text = normalizer.norm_abbre(text, ABBRE)
@@ -97,6 +135,7 @@ def normalize(text):
     text = normalizer.normalize_negative_number(text) 
     #print(f'23: {text}')
     text = normalizer.replace_dash_range(text)
+    text = normalizer.normalize_remaining_dash(text)
     text = normalizer.normalize_number(text)
 
     #text = text.replace('/', ' trên ')
@@ -109,13 +148,14 @@ def normalize(text):
     text = normalizer.normalize_number(text)
 
     #text = normalizer.lowercase(text)
-    #text = text.replace('.', '. ')
-    #text = text.replace('?', '? ')
-    #text = text.replace(',', ', ')
     #print(f'27: {text}')
-    text = re.sub(r'\.\s*', '. ', text)
-    text = re.sub(r'\?\s*', '? ', text)
-    text = re.sub(r',\s*', ', ', text)
+    # Fix punctuation spacing: ensure exactly one space after . ? ,
+    # but ONLY when followed by a word character (avoids breaking `. ` at end)
+    text = re.sub(r'\.(?=\S)', '. ', text)   # dot+nonspace → dot+space
+    text = re.sub(r'\?(?=\S)', '? ', text)   # question+nonspace → question+space
+    text = re.sub(r',(?=\S)', ', ', text)     # comma+nonspace → comma+space
+    # Normalize multiple spaces after punctuation to exactly one
+    text = re.sub(r'([.?!,])\s{2,}', r'\1 ', text)
     #print(f'28: {text}')
     text = normalizer.norm_duplicate_word(text)
     return text
@@ -126,6 +166,21 @@ def post_processing(text):
     text = re.sub('\.\.\s', '. ', text)
     #text  = text.lower()
     return text
+
+
+def fix_punctuation_spacing(text):
+    """
+    Final cleanup: fix spaces around punctuation marks.
+    The rule-based normalizer inserts ' word ' padded replacements which
+    creates artifacts like ' . ' and ' , ' with extra leading spaces.
+    """
+    # Remove space BEFORE period/comma/semicolon/colon (but preserve <> brackets)
+    text = re.sub(r'\s+([.,;:!?])', r'\1', text)
+    # Ensure space AFTER period/comma/semicolon (when followed by a word char)
+    text = re.sub(r'([.,;:!?])(?=[a-zA-Z\u00C0-\u1EF9<])', r'\1 ', text)
+    # Collapse multiple spaces
+    text = re.sub(r'\s{2,}', ' ', text)
+    return text.strip()
 
 def load_dict_english(path):
     with open(path, "r+", encoding="utf8") as f:
@@ -159,12 +214,13 @@ def mapping_eng(text, my_dict):
     pattern_str = r'\b(' + '|'.join(escaped_keys) + r')\b'
     pattern = re.compile(pattern_str, re.IGNORECASE)
 
-    # 4. Define the replacement logic
+    # 4. Define the replacement logic — wrap transliterations in <> brackets
+    # so bracket-aware inference uses slower speed for better pronunciation
     def replace_match(match):
-        # recover the matched word
         word = match.group(0)
-        # return the value from dict using the lowercase key
-        return my_dict.get(word.lower(), word)
+        replacement = my_dict.get(word.lower(), word)
+        # Wrap in brackets: "ây ai" -> "<ây ai>"
+        return f'<{replacement}>'
 
     # 5. Perform the substitution
     return pattern.sub(replace_match, text)
@@ -240,6 +296,22 @@ def apply_llm_normalization(text: str) -> str:
     return result
 
 
+def wrap_hardcoded_transliterations(text):
+    """
+    Wrap known transliterations from replace_special_words() in <> brackets.
+    These were converted early in the pipeline before brackets could be added.
+    """
+    # Map of transliterations created by replace_special_words
+    hardcoded = {
+        r'\bây ai\b': '<ây ai>',
+        r'\bki a\b': '<ki a>',
+        r'\bai ti\b': '<ai ti>',
+    }
+    for pattern, replacement in hardcoded.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
 def normalize_vietnamese_text(text):
     #logger.info(f"ORIGINAL INPUT: '{text}'")
     # Get the directory containing this file
@@ -248,6 +320,9 @@ def normalize_vietnamese_text(text):
     
     # Load English pronunciation dictionary
     dict = load_dict_english(str(current_file_dir / "english_word_3_v3.txt"))
+    
+    # Step 0: Pre-process special formats (currency, scientific notation, unicode math)
+    text = pre_normalize_special_formats(text)
     
     # Step 1: Rule-based normalize (existing pipeline)
     text = normalize(text)
@@ -268,9 +343,16 @@ def normalize_vietnamese_text(text):
     
     text = mapping_eng(text, dict)
 
+    # Wrap hardcoded transliterations from replace_special_words in <> brackets
+    # These were transliterated early in the pipeline (before we could wrap them)
+    text = wrap_hardcoded_transliterations(text)
+
     # Step 2: LLM post-processing for special tokens (NEW)
     if USE_LLM_NORMALIZER:
         text = apply_llm_normalization(text)
+
+    # Step 3: Final punctuation cleanup
+    text = fix_punctuation_spacing(text)
 
     text = normalize_sentence_case(text)
     logger.info(f"FINAL OUTPUT: '{text}'")

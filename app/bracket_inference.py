@@ -1,11 +1,11 @@
 """
 Bracket-aware inference for ZipVoice TTS.
 
-Parses normalized text containing <X> markers (single letters in angle brackets)
+Parses normalized text containing <X> markers (letters/words in angle brackets)
 and generates audio with different speed/step parameters for bracket segments
 vs normal segments, then concatenates all segments via cross-fade.
 
-Bracket segments (<A> <I>, <C> <E> <O>, etc.) are generated with:
+Bracket segments (<ây ai>, <kây pi ai>, <C> <E> <O>, etc.) are generated with:
   - speed = BRACKET_SPEED (default 0.5)
   - num_step = BRACKET_NUM_STEP (default 64)
 
@@ -56,8 +56,10 @@ def parse_bracketed_text(text: str) -> List[TextSegment]:
     if not text or "<" not in text:
         return [TextSegment(text=text.strip(), is_bracket=False)] if text and text.strip() else []
 
-    # Pattern to match a single <X> token (single letter or short content inside <>)
-    bracket_pattern = re.compile(r'<([^>]{1,5})>')
+    # Pattern to match a single <X> token (letters/words inside <>)
+    # Supports single letters (<A>) and multi-word transliterations (<kây pi ai>)
+    # Content must start with a letter (not digit/space) to avoid matching math comparisons
+    bracket_pattern = re.compile(r'<([a-zA-Z\u00C0-\u1EF9][^>]{0,49})>')
 
     segments: List[TextSegment] = []
     pos = 0
@@ -125,7 +127,7 @@ def parse_bracketed_text(text: str) -> List[TextSegment]:
 
 def has_brackets(text: str) -> bool:
     """Check if text contains any <X> bracket markers."""
-    return bool(re.search(r'<[^>]{1,5}>', text))
+    return bool(re.search(r'<[a-zA-Z\u00C0-\u1EF9][^>]{0,49}>', text))
 
 
 @torch.inference_mode()
