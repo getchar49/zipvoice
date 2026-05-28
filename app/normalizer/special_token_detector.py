@@ -56,17 +56,18 @@ _ALPHANUMERIC_CODE_RE = re.compile(
 )
 
 # 4. Residual special characters that rule-based should have removed but didn't
+# Note: bracket markers 【】 are added later in the pipeline and won't appear here
 _RESIDUAL_SPECIAL_RE = re.compile(
-    r'[#\$&\*@~\^\\|{}[\]<>]'
+    r'[#\$\&\*@~\^\\|{}[\]]'
 )
 
 # 5. Math expressions: sequences containing math operators between terms
 #    e.g., "ax² + bx + c = 0", "Δ = b²−4ac ≥ 0"
 _MATH_EXPR_RE = re.compile(
     r'(?:[a-zA-Zα-ωΑ-Ω0-9²³⁴⁰¹⁵⁶⁷⁸⁹√Δ∑∏()]+\s*'
-    r'[+\-−×÷=≠≈≡≤≥<>±∓/]\s*'
+    r'[+\-−×÷=≠≈≡≤≥±∓/]\s*'
     r'[a-zA-Zα-ωΑ-Ω0-9²³⁴⁰¹⁵⁶⁷⁸⁹√Δ∑∏()]+)'
-    r'(?:\s*[+\-−×÷=≠≈≡≤≥<>±∓/]\s*'
+    r'(?:\s*[+\-−×÷=≠≈≡≤≥±∓/]\s*'
     r'[a-zA-Zα-ωΑ-Ω0-9²³⁴⁰¹⁵⁶⁷⁸⁹√Δ∑∏()]+)*'
 )
 

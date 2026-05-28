@@ -226,7 +226,7 @@ class ZipVoiceEngine:
             with autocast(device_type=self.device.type):
                 with torch.inference_mode():
                     if has_brackets(input_text):
-                        # Use bracket-aware inference for text with <X> markers
+                        # Use bracket-aware inference for text with 【X】 markers
                         _ = generate_sentence_with_brackets(
                             save_path=job.out_wav_path,
                             prompt_text=voice.prompt_text,

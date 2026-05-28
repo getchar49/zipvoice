@@ -92,9 +92,8 @@ class TextNormalizer():
         return ' '.join(new_text)
 
     def remove_special_characters_v2(self, input_str):
-        # Preserve <> brackets (used for bracket-aware inference markers)
         # Preserve - (handled separately by normalize_remaining_dash)
-        return re.sub(r'[^\w\s,.?!;<>-]', ' ', input_str)
+        return re.sub(r'[^\w\s,.?!;-]', ' ', input_str)
 
     def normalize_remaining_dash(self, input_str):
         """

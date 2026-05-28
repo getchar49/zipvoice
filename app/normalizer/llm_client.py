@@ -26,13 +26,13 @@ Với mỗi mục, trả về dòng tương ứng:
 [INDEX] kết_quả_chuẩn_hóa
 
 QUY TẮC:
-1. Từ viết tắt & chuỗi chữ cái (VD: AI, CEO, FCC, RoHS): Tách rời từng chữ cái, bọc MỖI chữ cái trong ngoặc nhọn < >, cách nhau bằng khoảng trắng.
-   VD: AI -> <A> <I> ; CEO -> <C> <E> <O> ; RoHS -> <R> <o> <H> <S>
-2. Chuỗi mã kết hợp chữ-số (VD: IEEE 802.11ax): Chữ cái bọc ngoặc nhọn, số đọc tách rời, dấu chấm đọc thành "chấm".
-   VD: 802.11ax -> tám không hai chấm một một <a> <x>
+1. Từ viết tắt & chuỗi chữ cái (VD: AI, CEO, FCC, RoHS): Tách rời từng chữ cái, bọc MỖI chữ cái trong ngoặc 【 】, cách nhau bằng khoảng trắng.
+   VD: AI -> 【A】 【I】 ; CEO -> 【C】 【E】 【O】 ; RoHS -> 【R】 【o】 【H】 【S】
+2. Chuỗi mã kết hợp chữ-số (VD: IEEE 802.11ax): Chữ cái bọc ngoặc 【】, số đọc tách rời, dấu chấm đọc thành "chấm".
+   VD: 802.11ax -> tám không hai chấm một một 【a】 【x】
 3. Biểu thức toán học: Đọc thành lời tiếng Việt tự nhiên.
-   VD: ax² + bx + c = 0 -> <a> <x> bình cộng <b> <x> cộng <c> bằng không
-   VD: √(b²−4ac) -> căn bậc hai của <b> bình trừ bốn <a> <c>
+   VD: ax² + bx + c = 0 -> 【a】 【x】 bình cộng 【b】 【x】 cộng 【c】 bằng không
+   VD: √(b²−4ac) -> căn bậc hai của 【b】 bình trừ bốn 【a】 【c】
    VD: Δ ≥ 0 -> đen ta lớn hơn hoặc bằng không
 4. Ký hiệu đặc biệt đơn lẻ: Đọc thành tên tiếng Việt.
    VD: @ -> a còng ; # -> thăng ; $ -> đô la ; % -> phần trăm ; & -> và ; * -> sao

@@ -1,11 +1,11 @@
 """
 Bracket-aware inference for ZipVoice TTS.
 
-Parses normalized text containing <X> markers (letters/words in angle brackets)
+Parses normalized text containing 【X】 markers (letters/words in CJK brackets)
 and generates audio with different speed/step parameters for bracket segments
 vs normal segments, then concatenates all segments via cross-fade.
 
-Bracket segments (<ây ai>, <kây pi ai>, <C> <E> <O>, etc.) are generated with:
+Bracket segments (【ây ai】, 【kây pi ai】, 【C】 【E】 【O】, etc.) are generated with:
   - speed = BRACKET_SPEED (default 0.5)
   - num_step = BRACKET_NUM_STEP (default 64)
 
@@ -34,32 +34,32 @@ class TextSegment:
 
 def parse_bracketed_text(text: str) -> List[TextSegment]:
     """
-    Parse text containing <X> bracket markers into segments.
+    Parse text containing 【X】 bracket markers into segments.
 
-    Consecutive <X> markers (possibly separated by spaces, commas, or dots)
+    Consecutive 【X】 markers (possibly separated by spaces, commas, or dots)
     are grouped into a single bracket segment. Everything else is a normal segment.
 
     Args:
-        text: Normalized text potentially containing <X> markers.
+        text: Normalized text potentially containing 【X】 markers.
 
     Returns:
         List of TextSegment objects in order. Empty segments are excluded.
 
     Examples:
-        >>> parse_bracketed_text("Kiểm tra <A> <I>, Hà Nội.")
+        >>> parse_bracketed_text("Kiểm tra 【A】 【I】, Hà Nội.")
         [
             TextSegment(text="Kiểm tra", is_bracket=False),
             TextSegment(text="A I,", is_bracket=True),
             TextSegment(text="Hà Nội.", is_bracket=False),
         ]
     """
-    if not text or "<" not in text:
+    if not text or "【" not in text:
         return [TextSegment(text=text.strip(), is_bracket=False)] if text and text.strip() else []
 
-    # Pattern to match a single <X> token (letters/words inside <>)
-    # Supports single letters (<A>) and multi-word transliterations (<kây pi ai>)
-    # Content must start with a letter (not digit/space) to avoid matching math comparisons
-    bracket_pattern = re.compile(r'<([a-zA-Z\u00C0-\u1EF9][^>]{0,49})>')
+    # Pattern to match a single 【X】 token (letters/words inside 【】)
+    # Supports single letters (【A】) and multi-word transliterations (【kây pi ai】)
+    # Content must start with a letter (not digit/space) to avoid matching non-markers
+    bracket_pattern = re.compile(r'【([a-zA-Z\u00C0-\u1EF9][^】]{0,49})】')
 
     segments: List[TextSegment] = []
     pos = 0
@@ -126,8 +126,8 @@ def parse_bracketed_text(text: str) -> List[TextSegment]:
 
 
 def has_brackets(text: str) -> bool:
-    """Check if text contains any <X> bracket markers."""
-    return bool(re.search(r'<[a-zA-Z\u00C0-\u1EF9][^>]{0,49}>', text))
+    """Check if text contains any 【X】 bracket markers."""
+    return bool(re.search(r'【[a-zA-Z\u00C0-\u1EF9][^】]{0,49}】', text))
 
 
 @torch.inference_mode()
@@ -152,7 +152,7 @@ def generate_sentence_with_brackets(
     bracket_num_step: int = 64,
 ):
     """
-    Generate audio for text containing <X> bracket markers.
+    Generate audio for text containing 【X】 bracket markers.
 
     Splits text into bracket/normal segments, generates each with appropriate
     speed/step parameters, then cross-fade concatenates all segments.
@@ -163,7 +163,7 @@ def generate_sentence_with_brackets(
         save_path: Path to save the final concatenated wav.
         prompt_text: Transcription of the prompt wav.
         prompt_wav: Path to the prompt wav file.
-        text: Normalized text with potential <X> markers.
+        text: Normalized text with potential 【X】 markers.
         model: The ZipVoice model.
         vocoder: The vocoder model.
         tokenizer: Text tokenizer.

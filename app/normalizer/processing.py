@@ -174,10 +174,10 @@ def fix_punctuation_spacing(text):
     The rule-based normalizer inserts ' word ' padded replacements which
     creates artifacts like ' . ' and ' , ' with extra leading spaces.
     """
-    # Remove space BEFORE period/comma/semicolon/colon (but preserve <> brackets)
+    # Remove space BEFORE period/comma/semicolon/colon (but preserve 【】 brackets)
     text = re.sub(r'\s+([.,;:!?])', r'\1', text)
-    # Ensure space AFTER period/comma/semicolon (when followed by a word char)
-    text = re.sub(r'([.,;:!?])(?=[a-zA-Z\u00C0-\u1EF9<])', r'\1 ', text)
+    # Ensure space AFTER period/comma/semicolon (when followed by a word char or bracket)
+    text = re.sub(r'([.,;:!?])(?=[a-zA-Z\u00C0-\u1EF9【])', r'\1 ', text)
     # Collapse multiple spaces
     text = re.sub(r'\s{2,}', ' ', text)
     return text.strip()
@@ -214,13 +214,13 @@ def mapping_eng(text, my_dict):
     pattern_str = r'\b(' + '|'.join(escaped_keys) + r')\b'
     pattern = re.compile(pattern_str, re.IGNORECASE)
 
-    # 4. Define the replacement logic — wrap transliterations in <> brackets
+    # 4. Define the replacement logic — wrap transliterations in 【】 brackets
     # so bracket-aware inference uses slower speed for better pronunciation
     def replace_match(match):
         word = match.group(0)
         replacement = my_dict.get(word.lower(), word)
-        # Wrap in brackets: "ây ai" -> "<ây ai>"
-        return f'<{replacement}>'
+        # Wrap in brackets: "ây ai" -> "【ây ai】"
+        return f'【{replacement}】'
 
     # 5. Perform the substitution
     return pattern.sub(replace_match, text)
@@ -298,14 +298,14 @@ def apply_llm_normalization(text: str) -> str:
 
 def wrap_hardcoded_transliterations(text):
     """
-    Wrap known transliterations from replace_special_words() in <> brackets.
+    Wrap known transliterations from replace_special_words() in 【】 brackets.
     These were converted early in the pipeline before brackets could be added.
     """
     # Map of transliterations created by replace_special_words
     hardcoded = {
-        r'\bây ai\b': '<ây ai>',
-        r'\bki a\b': '<ki a>',
-        r'\bai ti\b': '<ai ti>',
+        r'\bây ai\b': '【ây ai】',
+        r'\bki a\b': '【ki a】',
+        r'\bai ti\b': '【ai ti】',
     }
     for pattern, replacement in hardcoded.items():
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
@@ -339,19 +339,21 @@ def normalize_vietnamese_text(text):
     #print(f'29: {text}')
     text = post_processing(text)
     #print(f'30: {text}')
-    # Apply English word pronunciations
-    
-    text = mapping_eng(text, dict)
 
-    # Wrap hardcoded transliterations from replace_special_words in <> brackets
-    # These were transliterated early in the pipeline (before we could wrap them)
-    text = wrap_hardcoded_transliterations(text)
-
-    # Step 2: LLM post-processing for special tokens (NEW)
+    # Step 2: LLM post-processing for special tokens
+    # Must run BEFORE mapping_eng so that bracket markers from English
+    # transliterations don't get detected as residual special characters.
     if USE_LLM_NORMALIZER:
         text = apply_llm_normalization(text)
 
-    # Step 3: Final punctuation cleanup
+    # Step 3: Apply English word pronunciations (creates 【..】 bracket markers)
+    text = mapping_eng(text, dict)
+
+    # Wrap hardcoded transliterations from replace_special_words in 【】 brackets
+    # These were transliterated early in the pipeline (before we could wrap them)
+    text = wrap_hardcoded_transliterations(text)
+
+    # Step 4: Final punctuation cleanup
     text = fix_punctuation_spacing(text)
 
     text = normalize_sentence_case(text)
