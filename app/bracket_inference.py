@@ -71,6 +71,8 @@ def parse_bracketed_text(text: str) -> List[TextSegment]:
         if m is None:
             # No more brackets — rest is normal text
             remaining = text[pos:].strip()
+            # Strip stray 【】 from normal text (they can't be rendered)
+            remaining = re.sub(r'[【】]', '', remaining).strip()
             if current_bracket_parts:
                 # Flush bracket segment
                 bracket_text = " ".join(current_bracket_parts)
@@ -106,9 +108,10 @@ def parse_bracketed_text(text: str) -> List[TextSegment]:
                 segments.append(TextSegment(text=bracket_text, is_bracket=True))
                 current_bracket_parts = []
 
-            # Add normal text before this bracket
-            if before_stripped:
-                segments.append(TextSegment(text=before_stripped, is_bracket=False))
+            # Add normal text before this bracket (strip stray 【】)
+            normal_text = re.sub(r'[【】]', '', before_stripped).strip()
+            if normal_text:
+                segments.append(TextSegment(text=normal_text, is_bracket=False))
 
             # Start new bracket sequence
             current_bracket_parts.append(m.group(1))
@@ -122,7 +125,14 @@ def parse_bracketed_text(text: str) -> List[TextSegment]:
             bracket_text += trailing_punct
         segments.append(TextSegment(text=bracket_text, is_bracket=True))
 
-    return [s for s in segments if s.text.strip()]
+    # Final cleanup: strip 【】 from normal segments, drop empty ones
+    cleaned = []
+    for s in segments:
+        if not s.is_bracket:
+            s.text = re.sub(r'[【】]', '', s.text).strip()
+        if s.text.strip():
+            cleaned.append(s)
+    return cleaned
 
 
 def has_brackets(text: str) -> bool:
@@ -229,6 +239,14 @@ def generate_sentence_with_brackets(
         seg_step = bracket_num_step if seg.is_bracket else num_step
         seg_type = "BRACKET" if seg.is_bracket else "NORMAL"
 
+        # Skip segments with no speakable content (only punctuation/whitespace)
+        speakable = re.sub(r'[\s.,;:!?…—–\-\'"()\[\]{}]', '', seg.text)
+        if not speakable:
+            logger.warning(f"[Bracket Inference] Skipping segment {i+1}/{total_segments} "
+                           f"with no speakable content: '{seg.text}'")
+            done_segments += 1
+            continue
+
         logger.info(f"[Bracket Inference] Segment {i+1}/{total_segments} "
                      f"({seg_type}): '{seg.text[:50]}...' "
                      f"speed={seg_speed}, step={seg_step}")
@@ -271,8 +289,12 @@ def generate_sentence_with_brackets(
             segment_wavs.append(wav)
 
         except Exception as e:
-            logger.error(f"[Bracket Inference] Failed to generate segment {i}: {e}")
-            raise
+            logger.error(f"[Bracket Inference] Failed to generate segment {i+1}/{total_segments} "
+                         f"('{seg.text[:50]}'): {e}")
+            # Skip failed segment instead of crashing the entire synthesis
+            logger.warning(f"[Bracket Inference] Skipping failed segment {i+1} and continuing")
+            done_segments += 1
+            continue
         finally:
             # Clean up temp file
             if os.path.exists(tmp_path):
