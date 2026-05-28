@@ -3,3 +3,8 @@ qreader
 voices/
 zxing/
 checkpoint/
+logs/normalization_20260528.log
+input.txt
+run.ipynb
+test_hybrid_normalizer.py
+test_normalize.py

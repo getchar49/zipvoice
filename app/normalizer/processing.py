@@ -3,8 +3,11 @@ from nltk import sent_tokenize
 from pathlib import Path
 from app.normalizer.normalizer import TextNormalizer
 from app.normalizer.abbre import ABBRE
+from app.normalizer.special_token_detector import detect_special_tokens
 import logging
 from datetime import datetime
+
+from app.settings import USE_LLM_NORMALIZER
 
 def setup_logging():
     """Setup logging configuration for normalization monitoring"""
@@ -34,15 +37,19 @@ def normalize(text):
     normalizer = TextNormalizer()
     text = normalizer.norm_abbre(text, ABBRE)
     #print(f'abbre: {text}')
+    # Remove URLs/emails BEFORE any punctuation processing (Bug 7,8)
+    text = normalizer.remove_urls(text)
+    # print(f'0: {text}')
     text = normalizer.separate_comma_and_dot_at_the_end(text)
     # text = normalizer.separate_numbers_adjacent_chars(text)
     #print(f"text: {text}")
-    text = normalizer.remove_urls(text)
-    # print(f'0: {text}')
     text = normalizer.remove_emoji(text)
     text = normalizer.replace_special_words(text)
     # text = normalizer.remove_emoticons(text)
     # print(f'1: {text}')
+    # Convert verbatim symbols to words BEFORE removing special characters (Bug 6)
+    text = normalizer.norm_tag_verbatim(text)
+    #print(f'verbatim: {text}')
     text = normalizer.remove_special_characters_v1(text)
     #print(f'2: {text}')
     text = normalizer.normalize_number_plate(text)
@@ -73,6 +80,8 @@ def normalize(text):
     #print(f'14: {text}')
     text = normalizer.normalize_time(text)
     # print(f'15: {text}')
+    # Now that time/phone/ratio are done, replace remaining colons (Bug 1)
+    text = normalizer.norm_colon_to_period(text)
     text = normalizer.normalize_number_range(text)
     # print(f'16: {text}')
     text = normalizer.norm_id_digit(text)
@@ -85,8 +94,6 @@ def normalize(text):
     # print(f'20: {text}')
     text = normalizer.norm_math_characters(text)
     # print(f'21: {text}')
-    text = normalizer.norm_tag_verbatim(text)
-    #print(f'22: {text}')
     text = normalizer.normalize_negative_number(text) 
     #print(f'23: {text}')
     text = normalizer.replace_dash_range(text)
@@ -183,6 +190,56 @@ def normalize_sentence_case(text):
 
     return re.sub(pattern, capitalize_match, text)
 
+def apply_llm_normalization(text: str) -> str:
+    """
+    Post-process text with LLM to normalize special tokens that rule-based
+    normalizer couldn't handle well (abbreviations, symbols, math, foreign words).
+
+    Detects special tokens, batches them, sends to LLM, and replaces in text.
+    Falls back to original text on any LLM failure.
+
+    Args:
+        text: Text already processed by rule-based normalizer.
+
+    Returns:
+        Text with special tokens normalized by LLM (may contain <X> markers).
+    """
+    from app.normalizer.llm_client import get_llm_normalizer
+
+    special_tokens = detect_special_tokens(text)
+    if not special_tokens:
+        logger.debug("No special tokens detected, skipping LLM normalization")
+        return text
+
+    logger.info(f"Detected {len(special_tokens)} special tokens for LLM normalization: "
+                f"{[t.text for t in special_tokens[:10]]}{'...' if len(special_tokens) > 10 else ''}")
+
+    llm = get_llm_normalizer()
+
+    # Batch tokens (max 30 per batch to keep LLM token count small)
+    MAX_BATCH = 30
+    token_texts = [t.text for t in special_tokens]
+    all_results = []
+
+    for batch_start in range(0, len(token_texts), MAX_BATCH):
+        batch = token_texts[batch_start:batch_start + MAX_BATCH]
+        try:
+            batch_results = llm.normalize_tokens_batch(batch)
+            all_results.extend(batch_results)
+        except Exception as e:
+            logger.warning(f"LLM batch normalization failed: {e}. Keeping originals.")
+            all_results.extend(batch)
+
+    # Replace tokens in text (reverse order to preserve positions)
+    result = text
+    for token, normalized in reversed(list(zip(special_tokens, all_results))):
+        if normalized and normalized != token.text:
+            result = result[:token.start] + normalized + result[token.end:]
+            logger.debug(f"LLM replaced: '{token.text}' -> '{normalized}'")
+
+    return result
+
+
 def normalize_vietnamese_text(text):
     #logger.info(f"ORIGINAL INPUT: '{text}'")
     # Get the directory containing this file
@@ -192,7 +249,7 @@ def normalize_vietnamese_text(text):
     # Load English pronunciation dictionary
     dict = load_dict_english(str(current_file_dir / "english_word_3_v3.txt"))
     
-    # Process each sentence
+    # Step 1: Rule-based normalize (existing pipeline)
     text = normalize(text)
     """
     for sentence in sent_tokenize(text):
@@ -210,6 +267,11 @@ def normalize_vietnamese_text(text):
     # Apply English word pronunciations
     
     text = mapping_eng(text, dict)
+
+    # Step 2: LLM post-processing for special tokens (NEW)
+    if USE_LLM_NORMALIZER:
+        text = apply_llm_normalization(text)
+
     text = normalize_sentence_case(text)
     logger.info(f"FINAL OUTPUT: '{text}'")
     

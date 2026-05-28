@@ -134,7 +134,7 @@ def num2words_float(number):
     if number[-1] in '! " “ \' ( ) , . : ; ? [ ] _ ` { | } ~ … — 》 ‘ ’'.split():
         number = number[:-1]
     interger, decimal = number.split(',')
-    return num2words_fixed(interger) + ' phẩy ' + num2words_fixed(decimal)
+    return num2words_fixed(interger) + ' phảy ' + n2w_single(decimal)
 
 def version2words(number):
     if number[-1] in '! " “ \' ( ) , . : ; ? [ ] _ ` { | } ~ … — 》 ‘ ’'.split():

@@ -37,18 +37,22 @@ class TextNormalizer():
 
     def replace_special_words(self, input_str):
         dict_map = {
-            " AI ": " ây ai ",
-            " KIA ": " ki a ",
-            " IT ": " ai ti "
+            r'\bAI\b': 'ây ai',
+            r'\bKIA\b': 'ki a',
+            r'\bIT\b': 'ai ti'
         }
-        for i, j in dict_map.items():
-            input_str = input_str.replace(i, j)
+        for pattern, replacement in dict_map.items():
+            input_str = re.sub(pattern, replacement, input_str)
         return input_str
 
     def remove_special_characters_v1(self, input_str):
         input_str = ' ' + input_str + ' '
+        # Convert pause-type punctuation to commas before removing
+        input_str = input_str.replace('…', ',')
+        input_str = input_str.replace('—', ',')
+        input_str = input_str.replace('–', ',')
 #         punct = '! " “ \' ( ) ; [ ] * _ ` { | } ~ … 》 ≧ ≦ –  ‘ ’ · 】 ◇◆ ㅁ • ” `` '' ” ● ︶ ︶ ● † ⬔'.split()
-        punct = '" “ \' ( ) [ ] * _ ` { ~ } … 》 ≧ ≦ –  ‘ ’ · 】 ◇◆ ㅁ • ” `` '' ” ● ︶ ︶ ● † ⬔'.split()
+        punct = '" “ \' ( ) [ ] * _ ` { ~ } 》 ≧ ≦ ‘ ’ · 】 ◇◆ ㅁ • ” `` '' ” ● ︶ ︶ ● † ⬔'.split()
         for e in punct:
             e = e.strip()
             input_str = input_str.replace(e, ' ')
@@ -125,10 +129,89 @@ class TextNormalizer():
 
     def remove_urls(self, input_str):
         """
-        Remove urls in input_str
+        Convert URLs and emails to spoken form instead of removing them.
         """
-        url_pattern = re.compile(r'(https|http)?://\S+|www\.\S+|[A-Za-z0-9]*@[A-Za-z]*\.+[A-Za-z0-9]*')
-        return url_pattern.sub(r'', input_str)
+        # Convert emails first (more specific pattern)
+        email_pattern = re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+        input_str = email_pattern.sub(lambda m: self._email_to_speech(m.group()), input_str)
+        
+        # Convert URLs
+        url_pattern = re.compile(r'(https?|ftp)://\S+|www\.\S+')
+        input_str = url_pattern.sub(lambda m: self._url_to_speech(m.group()), input_str)
+        
+        return input_str
+    
+    def _email_to_speech(self, email):
+        """
+        Convert email to spoken form.
+        test.user123@example.com -> 'test chấm user một hai ba a còng example chấm com'
+        """
+        # Split at @
+        local_part, domain = email.split('@', 1)
+        
+        # Convert local part
+        local_spoken = self._convert_segment_to_speech(local_part)
+        
+        # Convert domain
+        domain_spoken = self._convert_segment_to_speech(domain)
+        
+        return f' {local_spoken} a còng {domain_spoken} '
+    
+    def _url_to_speech(self, url):
+        """
+        Convert URL to spoken form.
+        https://www.example.com -> 'example chấm com'
+        """
+        # Remove protocol
+        url_clean = re.sub(r'^(https?|ftp)://', '', url)
+        # Remove www.
+        url_clean = re.sub(r'^www\.', '', url_clean)
+        # Remove trailing slashes and fragments
+        url_clean = url_clean.rstrip('/')
+        
+        spoken = self._convert_segment_to_speech(url_clean)
+        return f' {spoken} '
+    
+    def _convert_segment_to_speech(self, segment):
+        """
+        Convert a segment like 'test.user123' to spoken form: 'test chấm user một hai ba'
+        Split by dots and hyphens, then read numbers digit-by-digit.
+        """
+        # Split by dots first
+        parts = segment.split('.')
+        spoken_parts = []
+        for part in parts:
+            # Split by hyphens within each part
+            sub_parts = part.split('-')
+            spoken_sub = []
+            for sub in sub_parts:
+                spoken_sub.append(self._convert_token_to_speech(sub))
+            spoken_parts.append(' gạch ngang '.join(spoken_sub))
+        
+        return ' chấm '.join(spoken_parts)
+    
+    def _convert_token_to_speech(self, token):
+        """
+        Convert a single token (no dots/hyphens) to speech.
+        Separates letters and numbers: 'user123' -> 'user một hai ba'
+        """
+        # Split into letter and digit groups
+        groups = re.findall(r'[A-Za-z]+|\d+|[^A-Za-z0-9]+', token)
+        result_parts = []
+        for group in groups:
+            if group.isdigit():
+                # Read digits one by one
+                result_parts.append(n2w_single(group))
+            elif group.isalpha():
+                result_parts.append(group)
+            # Skip other characters (underscores, etc.)
+            elif group == '_':
+                result_parts.append('gạch dưới')
+            elif group == '+':
+                result_parts.append('cộng')
+            elif group == '%':
+                result_parts.append('phần trăm')
+        return ' '.join(result_parts)
     
     def remove_html(self, input_str):
         """
@@ -151,7 +234,7 @@ class TextNormalizer():
         # 1. Define the Prefix (Context)
         # Note: [hH] matches h or H. No pipe needed inside [].
         # We use (?:...) for non-capturing groups to save memory.
-        prefix_pattern = r"(?:[hH]otline|[T|t]ổng đài|[Đ|đ]iện thoại|SDT|SĐT|[zZ]alo|đường dây nóng|[Ll]iên hệ|gọi|call|chi tiết|hỗ trợ|tư vấn|liên lạc|công ty|[bB]án [hH]àng|[đĐ]ặt hàng)"
+        prefix_pattern = r"(?:[hH]otline|[T|t]ổng đài|[Đ|đ]iện thoại|[Ss]ố điện thoại|SDT|SĐT|[zZ]alo|đường dây nóng|[Ll]iên hệ|gọi|call|chi tiết|hỗ trợ|tư vấn|liên lạc|công ty|[bB]án [hH]àng|[đĐ]ặt hàng)"
 
         # 2. Define the Separator (CRITICAL FIX)
         # Only allow spaces, colons, or dots immediately after the prefix. 
@@ -199,11 +282,16 @@ class TextNormalizer():
         return result_str.strip()
 
     def norm_tag_verbatim(self, input_str):
-        input_str = ' ' + input_str + ' '
-        
+        import re as _re
         for key, value in VERBATIM.items():
-            input_str = input_str.replace(' ' + key.strip() + ' ', ' ' + value.strip() + ' ')
-            
+            # Escape the key for regex and match it even when adjacent to punctuation
+            escaped_key = _re.escape(key.strip())
+            # Match the symbol when surrounded by space, punctuation, or start/end of string
+            input_str = _re.sub(
+                r'(?<=\s)' + escaped_key + r'(?=[\s,.:;!?\)\]\}]|$)',
+                ' ' + value.strip() + ' ',
+                input_str
+            )
         return input_str.strip()
 
     def normalize_AZ09(self, input_str):
@@ -310,7 +398,7 @@ class TextNormalizer():
         # Normalize dd/mm/yy[yy] (dmy) form of dates
         # Note: '8-6-2019' format này để riêng vì tránh cases "từ '8-6/2019' mây thay đổi nhiều"
         #date_dmy_pattern = re.compile(r'[\s|(](0?[1-9]|[12]\d|3[01])[\/.](0?[1-9]|[1][0-2])[\/.](\d{4}|\d{2})|\s(0?[1-9]|[12]\d|3[01])[\-](0?[1-9]|[1][0-2])[\-](\d{4}|\d{2})([\s|.|,|)|:|;])')
-        date_dmy_pattern = re.compile(r'(?<!\d)(0?[1-9]|[12]\d|3[01])([\/.\-])(0?[1-9]|1[0-2])\2(\d{2}|\d{4})(?![\d.])')
+        date_dmy_pattern = re.compile(r'(?<!\d)(?<!\()(0?[1-9]|[12]\d|3[01])([\/.\-])(0?[1-9]|1[0-2])\2(\d{2}|\d{4})(?![\d.])')
         temp_str_date_dmy = input_str
         dates_dmy = []
         while(date_dmy_pattern.search(temp_str_date_dmy)):
@@ -421,17 +509,6 @@ class TextNormalizer():
 
         return input_str.strip()
 
-    def norm_date_range_type_1(self, input_str):
-        """
-        Normalize date ranges.
-        """
-        input_str = ' ' + input_str + ' '
-        # Normalize yyyy-yyyy forms: 2016-2017, 1912-1982 ngày sinh, v.v.
-        # @improve:
-        # Khi nào thì chèn từ vào ví dụ 'năm học 2018-2019' thì đọc luôn tên năm còn
-        # 'công ty thu thiếu hụt khoản này từ năm 2012-2017 là 11,3 tỷ đồng'
-        # thì cần thêm từ "đến": từ năm 2012 đến 2017
-        
     def norm_date_range_type_1(self, input_str):
         year_range_pattern = re.compile(r'\s(\d{4})\s*\-\s*(\d{4})([\s|.|,|)])')
         temp_str = input_str
@@ -953,6 +1030,33 @@ class TextNormalizer():
         input_str = self.norm_tag_fraction2(input_str)
         input_str = self.norm_tag_fraction3(input_str)
         input_str = self.norm_tag_fraction4(input_str)
+        input_str = self.norm_tag_fraction5(input_str)
+        return input_str.strip()
+
+    def norm_tag_fraction5(self, input_str):
+        """
+        Normalize standalone fractions like 1/2, 3/4, 5/8 that have no special context.
+        Converts X/Y to 'X trên Y' as default behavior.
+        Only matches when numerator and denominator are reasonable (1-999).
+        Skips patterns that look like dates (already handled by date normalizers with context prefixes).
+        """
+        input_str = ' ' + input_str + ' '
+        # Match standalone number/number patterns not preceded by date-related words
+        # Negative lookbehind for date context words
+        p = re.compile(
+            r'(?<![a-zA-ZÀ-ỹ])'  # not preceded by a letter (avoids matching after "ngày", etc.)
+            r'(\d{1,3})\s*/\s*(\d{1,3})'
+            r'(?=[\s.,;:!?\)\]\}]|$)'  # followed by delimiter or end
+        )
+        
+        def replace_fraction(match):
+            numerator = match.group(1)
+            denominator = match.group(2)
+            num_str = num2words_fixed(numerator)
+            den_str = num2words_fixed(denominator)
+            return ' ' + num_str + ' trên ' + den_str + ' '
+        
+        input_str = p.sub(replace_fraction, input_str)
         return input_str.strip()
 
 
@@ -1088,8 +1192,41 @@ class TextNormalizer():
         input_str = self.norm_number_type_0(input_str)
         input_str = self.norm_number_type_1(input_str)
         input_str = self.norm_number_type_2(input_str)
+        input_str = self.norm_number_type_dot_decimal(input_str)
         input_str = self.norm_number_type_3(input_str)
 
+        return input_str.strip()
+
+    def norm_number_type_dot_decimal(self, input_str):
+        """
+        Normalize international-format decimal numbers using dot as decimal separator.
+        e.g. '3.14159' -> 'ba chấm một bốn một năm chín'
+        This handles numbers that were NOT matched by norm_number_type_1 (VN thousand-separated).
+        Must run BEFORE norm_number_type_3 (catch-all digit handler).
+        """
+        input_str = ' ' + input_str + ' '
+        # Match numbers with a single dot that are NOT VN thousand-separated
+        # (VN format: \d{1,3}(?:\.\d{3})+ — groups of exactly 3 digits after dot)
+        # This matches: integer_part.decimal_part where decimal_part is NOT exactly 3 digits
+        # or where the number has only one dot
+        p = re.compile(r'(?<=\s)(\d+)\.(\d+)(?=[\s.,;:!?\)\]\}]|$)')
+        
+        def replace_decimal(match):
+            integer_part = match.group(1)
+            decimal_part = match.group(2)
+            
+            # Check if this could be a VN thousand-separated number (exactly 3-digit groups)
+            # If so, skip it (it should have been handled by norm_number_type_1)
+            if len(decimal_part) == 3:
+                # Could be VN thousand separator, but if it wasn't matched by type_1,
+                # treat as decimal
+                pass
+            
+            int_str = num2words_fixed(integer_part)
+            dec_str = n2w_single(decimal_part)
+            return ' ' + int_str + ' chấm ' + dec_str + ' '
+        
+        input_str = p.sub(replace_decimal, input_str)
         return input_str.strip()
 
     def norm_number_type_0(self, input_str):
@@ -1100,6 +1237,8 @@ class TextNormalizer():
         input_str = ' ' + input_str + ' '
         vi_numbers = re.findall(r'\b\d{1,3}(?:\.\d{3})*,\d+\b', input_str)
         # print(vi_numbers)
+        # Sort by length descending to prevent partial replacements
+        vi_numbers = sorted(vi_numbers, key=len, reverse=True)
         if len(vi_numbers) > 0:
             for vi_number in vi_numbers:
                 vi_number_1 = vi_number.split(',')[0]
@@ -1109,7 +1248,8 @@ class TextNormalizer():
                 if int(vi_number_2) == 0:
                     vi_number_ver = vi_number_1_str
                 else:
-                    vi_number_2_str = num2words_fixed(vi_number_2)
+                    # Read decimal part digit-by-digit (standard Vietnamese)
+                    vi_number_2_str = n2w_single(vi_number_2)
                     vi_number_ver = vi_number_1_str + " phảy " + vi_number_2_str
                 input_str = input_str.replace(vi_number, ' ' + vi_number_ver + ' ')
 
@@ -1119,19 +1259,20 @@ class TextNormalizer():
         """
         Normalize number
         """
-        # Normalize vi-style numbers: '2.300 Euro', '25.320 vé', etc
+        # Normalize vi-style numbers: '2.300 Euro', '25.320 vé', '1.000.000', etc
+        # Only match numbers with exactly 3-digit groups after each dot (VN thousand separator)
         input_str = ' ' + input_str + ' '
-        vi_numbers = re.findall(r'[\s|(]([\d]+\.[\d]+\.*[\d]*\.*[\d]*\.*[\d]*)', input_str)
+        # Match VN thousand-separated numbers (e.g. 1.000, 10.000, 1.000.000)
+        # (?!\d) ensures we don't partially match 3.14159 as 3.141
+        vi_numbers = re.findall(r'[\s|(](\d{1,3}(?:\.\d{3})+)(?!\d)', input_str)
         # print(vi_numbers)
+        # Sort by length descending to prevent partial replacements (e.g. 1.000 inside 1.000.000)
+        vi_numbers = sorted(vi_numbers, key=len, reverse=True)
         if len(vi_numbers) > 0:
             for vi_number in vi_numbers:
                 vi_number_norm = "".join(vi_number.split('.'))
-                if int(vi_number_norm) >= 1000:
-                    vi_number_str = num2words_fixed(vi_number_norm)
-                    input_str = input_str.replace(vi_number, ' ' + vi_number_str + ' ')
-                else:
-                    vi_number_ver = version2words(vi_number)
-                    input_str = input_str.replace(vi_number, ' ' + vi_number_ver + ' ')
+                vi_number_str = num2words_fixed(vi_number_norm)
+                input_str = input_str.replace(vi_number, ' ' + vi_number_str + ' ')
 
         return input_str.strip()
 
@@ -1338,12 +1479,21 @@ class TextNormalizer():
         s = input_str.replace('\r\n', '\n').replace('\r', '\n')
         s = re.sub(r'(?<=[\.\,\?\!\:\;\)\]\}\'"\u2019\u201D])\s*\n+\s*', ' ', s)
         input_str = re.sub(r'\s*\n+\s*', '. ', s)
-        input_str = re.sub(r'[:]+', '. ', input_str)
+        # NOTE: Do NOT replace ':' here — it breaks time (08:05), phone, ratio patterns
+        # Colon cleanup is done later via norm_colon_to_period() after time/phone normalization
         input_str = re.sub(r'phẩy', 'phảy', input_str)
         separated_sentence = re.sub(r'(?<!\d)([.,])(?!\d)', r'\1 ', input_str)
         # Loại bỏ các khoảng trắng thừa có thể xảy ra do dấu cách giữa các dấu câu
         separated_sentence = re.sub(r'\s+', ' ', separated_sentence).strip()
         return separated_sentence
+    
+    def norm_colon_to_period(self, input_str):
+        """
+        Replace remaining colons with periods.
+        Must be called AFTER time, phone, and ratio normalization.
+        """
+        input_str = re.sub(r'[:]+', '. ', input_str)
+        return input_str
     
     def norm_ratio(self, input_str):
         """

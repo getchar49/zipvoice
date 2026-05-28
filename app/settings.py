@@ -15,3 +15,14 @@ LANG_TOKENIZER   = os.getenv("LANG_TOKENIZER", "vi")
 MAX_DURATION     = float(os.getenv("MAX_DURATION", "100"))  # per internal batch cap (sec)
 MAX_CONCURRENT   = int(os.getenv("MAX_CONCURRENT", "5"))
 USE_MULTIPLE_MODELS=True
+
+# LLM Normalizer
+LLM_API_URL      = os.getenv("LLM_API_URL", "http://x.x.x.x:x/v1/chat/completions")
+LLM_MODEL        = os.getenv("LLM_MODEL", "llm-model")
+LLM_API_KEY      = os.getenv("LLM_API_KEY", "dummy")
+LLM_TIMEOUT      = int(os.getenv("LLM_TIMEOUT", "10"))         # seconds per request
+USE_LLM_NORMALIZER = os.getenv("USE_LLM_NORMALIZER", "true").lower() == "true"
+
+# Bracket inference params (for <X> letter segments)
+BRACKET_SPEED    = float(os.getenv("BRACKET_SPEED", "0.5"))
+BRACKET_NUM_STEP = int(os.getenv("BRACKET_NUM_STEP", "64"))

@@ -11,10 +11,12 @@ from zipvoice.bin.infer_zipvoice import (
     load_trt, HUGGINGFACE_REPO, MODEL_DIR
 )
 from app.normalizer.processing import normalize_vietnamese_text
+from app.bracket_inference import has_brackets, generate_sentence_with_brackets
 
 from .settings import (
     RESULTS_DIR, MODEL_NAME, ZIPVOICE_MODEL_DIR, VOCOS_LOCAL_DIR,
-    DEVICE, TOKENIZER, LANG_TOKENIZER, MAX_DURATION
+    DEVICE, TOKENIZER, LANG_TOKENIZER, MAX_DURATION,
+    BRACKET_SPEED, BRACKET_NUM_STEP
 )
 from .registry import VoiceRegistry, Voice
 
@@ -223,24 +225,48 @@ class ZipVoiceEngine:
         try:
             with autocast(device_type=self.device.type):
                 with torch.inference_mode():
-                    _ = generate_sentence(
-                        save_path=job.out_wav_path,
-                        prompt_text=voice.prompt_text,
-                        prompt_wav=voice.prompt_wav,
-                        text = input_text,
-                        model=self.model,
-                        vocoder=self.vocoder,
-                        tokenizer=self.tokenizer,
-                        feature_extractor=self.feature_extractor,
-                        device=self.device,
-                        num_step=num_step,
-                        guidance_scale=guidance,
-                        speed=job.speed,
-                        sampling_rate=self.sampling_rate,
-                        max_duration=MAX_DURATION,
-                        remove_long_sil=job.remove_long_sil,
-                        progress_cb=on_progress, 
-                    )
+                    if has_brackets(input_text):
+                        # Use bracket-aware inference for text with <X> markers
+                        _ = generate_sentence_with_brackets(
+                            save_path=job.out_wav_path,
+                            prompt_text=voice.prompt_text,
+                            prompt_wav=voice.prompt_wav,
+                            text=input_text,
+                            model=self.model,
+                            vocoder=self.vocoder,
+                            tokenizer=self.tokenizer,
+                            feature_extractor=self.feature_extractor,
+                            device=self.device,
+                            num_step=num_step,
+                            guidance_scale=guidance,
+                            speed=job.speed,
+                            sampling_rate=self.sampling_rate,
+                            max_duration=MAX_DURATION,
+                            remove_long_sil=job.remove_long_sil,
+                            progress_cb=on_progress,
+                            bracket_speed=BRACKET_SPEED,
+                            bracket_num_step=BRACKET_NUM_STEP,
+                        )
+                    else:
+                        # Standard inference for text without brackets
+                        _ = generate_sentence(
+                            save_path=job.out_wav_path,
+                            prompt_text=voice.prompt_text,
+                            prompt_wav=voice.prompt_wav,
+                            text=input_text,
+                            model=self.model,
+                            vocoder=self.vocoder,
+                            tokenizer=self.tokenizer,
+                            feature_extractor=self.feature_extractor,
+                            device=self.device,
+                            num_step=num_step,
+                            guidance_scale=guidance,
+                            speed=job.speed,
+                            sampling_rate=self.sampling_rate,
+                            max_duration=MAX_DURATION,
+                            remove_long_sil=job.remove_long_sil,
+                            progress_cb=on_progress,
+                        )
                 
                 if job.status == "cancelled":
                     raise JobCancelledError("Job cancelled at finalization.")

@@ -95,6 +95,7 @@ UNITS_DICT = {
 	'GHz':'ghi ga héc',
 	'MHz':'mê ga héc',
 	'Hz':'héc',
+	'hPa':'héc tô pa xcan',
  
 	# Units of data-rate 
 	'Mbps':'mê ga bít trên giây',
