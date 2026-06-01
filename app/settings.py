@@ -24,5 +24,8 @@ LLM_TIMEOUT      = int(os.getenv("LLM_TIMEOUT", "10"))         # seconds per req
 USE_LLM_NORMALIZER = os.getenv("USE_LLM_NORMALIZER", "true").lower() == "true"
 
 # Bracket inference params (for <X> letter segments)
-BRACKET_SPEED    = float(os.getenv("BRACKET_SPEED", "0.5"))
+BRACKET_SPEED    = float(os.getenv("BRACKET_SPEED", "0.4"))
 BRACKET_NUM_STEP = int(os.getenv("BRACKET_NUM_STEP", "64"))
+
+# Double punctuation experiment (. → .. and , → ,,)
+USE_DOUBLE_PUNCTUATION = os.getenv("USE_DOUBLE_PUNCTUATION", "false").lower() == "true"

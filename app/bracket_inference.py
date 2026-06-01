@@ -151,7 +151,7 @@ def generate_sentence_with_brackets(
     tokenizer,
     feature_extractor,
     device: torch.device,
-    num_step: int = 16,
+    num_step: int = 32,
     guidance_scale: float = 1.0,
     speed: float = 1.0,
     sampling_rate: int = 24000,

@@ -3,11 +3,11 @@ from nltk import sent_tokenize
 from pathlib import Path
 from app.normalizer.normalizer import TextNormalizer
 from app.normalizer.abbre import ABBRE
-from app.normalizer.special_token_detector import detect_special_tokens
+from app.normalizer.english_letters import spell_out_abbreviation
 import logging
 from datetime import datetime
 
-from app.settings import USE_LLM_NORMALIZER
+from app.settings import USE_LLM_NORMALIZER, USE_DOUBLE_PUNCTUATION
 
 def setup_logging():
     """Setup logging configuration for normalization monitoring"""
@@ -32,43 +32,6 @@ def setup_logging():
 
 # Initialize logger
 logger = setup_logging()
-
-def pre_normalize_special_formats(text):
-    """
-    Pre-process text to handle formats that the existing rule-based normalizer
-    doesn't handle well. Runs BEFORE the main normalize() pipeline.
-    """
-    # 1. Unicode math operators → ASCII equivalents (so downstream handlers work)
-    text = text.replace('×', 'x')   # multiplication sign
-    text = text.replace('÷', '/')   # division sign
-    text = text.replace('−', '-')   # minus sign (unicode) → hyphen-minus
-    text = text.replace('≤', '<=')
-    text = text.replace('≥', '>=')
-    text = text.replace('≠', '!=')
-    text = text.replace('±', '+-')
-
-    # 2. Scientific notation: 3.5×10^6 → ba chấm năm nhân mười mũ sáu
-    # (After × → x above, this becomes 3.5x10^6)
-    def sci_notation_to_words(m):
-        base = m.group(1)       # e.g. "3.5" or "3"
-        exponent = m.group(2)   # e.g. "6"
-        return f'{base} nhân mười mũ {exponent}'
-    text = re.sub(r'(\d+(?:[.,]\d+)?)\s*[xX]\s*10\^(\d+)', sci_notation_to_words, text)
-
-    # 3. Currency: $1,234.5678 (international format with comma as thousand sep)
-    # Convert to a form the VN normalizer can handle
-    def currency_to_words(m):
-        symbol = m.group(1)     # e.g. "$" or "€"
-        number = m.group(2)     # e.g. "1,234.5678" or "0.000045"
-        currency_names = {'$': 'đô la', '€': 'ơ rô', '£': 'bảng', '¥': 'yên'}
-        currency_name = currency_names.get(symbol, symbol)
-        # Remove thousand separators (commas in international format)
-        # but keep the decimal point
-        clean_number = number.replace(',', '')
-        return f'{currency_name} {clean_number}'
-    text = re.sub(r'([\$€£¥])(\d[\d,]*(?:\.\d+)?)', currency_to_words, text)
-
-    return text
 
 
 def normalize(text):
@@ -196,7 +159,31 @@ def load_dict_english(path):
         print(count)
     return rs
 
+def load_spell_out_words(path):
+    """Load the spell-out abbreviation word list from file.
+    
+    Returns a set of uppercase abbreviation strings that should be
+    spelled out letter-by-letter (e.g., {'TTS', 'API', 'CPU', ...}).
+    """
+    try:
+        with open(path, "r", encoding="utf8") as f:
+            words = set()
+            for line in f:
+                word = line.strip()
+                if word and not word.startswith('#'):
+                    words.add(word.upper())
+            return words
+    except FileNotFoundError:
+        logger.warning(f"Spell-out words file not found: {path}")
+        return set()
+
+
 def mapping_eng(text, my_dict):
+    """Replace English words with Vietnamese phonetic pronunciations.
+    
+    Unlike the previous version, this does NOT wrap replacements in 【】 brackets.
+    Words from english_word_3_v3.txt are read at normal TTS speed, not slow bracket speed.
+    """
     if not text or not my_dict:
         return text
 
@@ -214,16 +201,15 @@ def mapping_eng(text, my_dict):
     pattern_str = r'\b(' + '|'.join(escaped_keys) + r')\b'
     pattern = re.compile(pattern_str, re.IGNORECASE)
 
-    # 4. Define the replacement logic — wrap transliterations in 【】 brackets
-    # so bracket-aware inference uses slower speed for better pronunciation
+    # 4. Define the replacement logic — plain text replacement (no brackets)
     def replace_match(match):
         word = match.group(0)
         replacement = my_dict.get(word.lower(), word)
-        # Wrap in brackets: "ây ai" -> "【ây ai】"
-        return f'【{replacement}】'
+        return replacement
 
     # 5. Perform the substitution
     return pattern.sub(replace_match, text)
+
 
 def normalize_sentence_case(text):
     if not text:
@@ -246,20 +232,15 @@ def normalize_sentence_case(text):
 
     return re.sub(pattern, capitalize_match, text)
 
+
 def apply_llm_normalization(text: str) -> str:
     """
-    Post-process text with LLM to normalize special tokens that rule-based
-    normalizer couldn't handle well (abbreviations, symbols, math, foreign words).
-
-    Detects special tokens, batches them, sends to LLM, and replaces in text.
-    Falls back to original text on any LLM failure.
-
-    Args:
-        text: Text already processed by rule-based normalizer.
-
-    Returns:
-        Text with special tokens normalized by LLM (may contain <X> markers).
+    (LEGACY) Post-process text with LLM to normalize special tokens 
+    token-by-token. Kept for backward compatibility.
+    
+    For the new pipeline, use apply_llm_full_text_normalization() instead.
     """
+    from app.normalizer.special_token_detector import detect_special_tokens
     from app.normalizer.llm_client import get_llm_normalizer
 
     special_tokens = detect_special_tokens(text)
@@ -296,6 +277,108 @@ def apply_llm_normalization(text: str) -> str:
     return result
 
 
+def apply_llm_full_text_normalization(text: str) -> str:
+    """
+    Normalize entire text via LLM in a single pass.
+    
+    The LLM handles:
+    - Vietnamese/foreign abbreviations → Vietnamese pronunciation
+    - Foreign words → Vietnamese pronunciation  
+    - Special symbols → Vietnamese names
+    - Punctuation → only . and ,
+    - English spell-out abbreviations → {{SPELL}}ABC{{/SPELL}} markers
+    
+    Falls back to original text on any LLM failure.
+    
+    Args:
+        text: Text already processed by rule-based normalizer + mapping_eng.
+        
+    Returns:
+        Fully normalized text with {{SPELL}} markers for abbreviations.
+    """
+    from app.normalizer.llm_client import get_llm_normalizer
+    
+    llm = get_llm_normalizer()
+    result = llm.normalize_full_text(text)
+    
+    logger.info(f"LLM full-text normalization result preview: '{result[:200]}...'")
+    return result
+
+
+def process_spell_out_markers(text: str, spell_out_set: set = None) -> str:
+    """
+    Process {{SPELL}}ABC{{/SPELL}} markers in text.
+    
+    For each marker:
+    1. Extract the abbreviation (e.g., "TTS")
+    2. Look up each letter in ENGLISH_LETTER_PRONUNCIATION
+    3. Replace with a single 【pronunciation】 bracket group
+    
+    Also handles any remaining uppercase abbreviations that match
+    the spell_out_set (supplementary file) but weren't caught by LLM.
+    
+    Args:
+        text: Text containing {{SPELL}}...{{/SPELL}} markers from LLM.
+        spell_out_set: Optional set of known spell-out words for fallback.
+        
+    Returns:
+        Text with markers replaced by 【bracketed pronunciation】.
+        
+    Examples:
+        "Hệ thống {{SPELL}}TTS{{/SPELL}} rất tốt"
+        → "Hệ thống 【ti ti ét】 rất tốt"
+    """
+    # 1. Process {{SPELL}}...{{/SPELL}} markers from LLM
+    spell_pattern = re.compile(r'\{\{SPELL\}\}([A-Za-z]+)\{\{/SPELL\}\}')
+    
+    def replace_spell_marker(match):
+        abbr = match.group(1)
+        pronunciation = spell_out_abbreviation(abbr)
+        if pronunciation:
+            logger.debug(f"Spell-out: '{abbr}' → '【{pronunciation}】'")
+            return f'【{pronunciation}】'
+        return abbr  # fallback: keep original if no pronunciation found
+    
+    text = spell_pattern.sub(replace_spell_marker, text)
+    
+    # 2. Fallback: check for remaining uppercase abbreviations in spell_out_set
+    if spell_out_set:
+        def replace_spell_out_word(match):
+            word = match.group(0)
+            if word.upper() in spell_out_set:
+                pronunciation = spell_out_abbreviation(word)
+                if pronunciation:
+                    logger.debug(f"Spell-out (fallback): '{word}' → '【{pronunciation}】'")
+                    return f'【{pronunciation}】'
+            return word
+        
+        # Match uppercase words (2+ letters) that aren't already in brackets
+        text = re.sub(r'(?<![【\w])\b[A-Z]{2,}\b(?![】\w])', replace_spell_out_word, text)
+    
+    return text
+
+
+def apply_double_punctuation(text: str) -> str:
+    """
+    Experimental: Double all periods and commas for TTS pause testing.
+    
+    Replaces:
+        , → ,,
+        . → ..
+        
+    This is to test whether doubled punctuation produces better
+    pauses/timing in the TTS audio output.
+    
+    Skips punctuation that's already doubled or inside 【】 brackets.
+    """
+    # Replace single periods (not already doubled, not inside brackets)
+    # Use negative lookbehind/lookahead to avoid matching already-doubled
+    text = re.sub(r'(?<!\.)\.(?!\.)', '..', text)
+    text = re.sub(r'(?<!,),(?!,)', ',,', text)
+    
+    return text
+
+
 def wrap_hardcoded_transliterations(text):
     """
     Wrap known transliterations from replace_special_words() in 【】 brackets.
@@ -313,18 +396,33 @@ def wrap_hardcoded_transliterations(text):
 
 
 def normalize_vietnamese_text(text):
+    """
+    Main entry point for normalizing Vietnamese text for TTS.
+    
+    Pipeline:
+        Step 1: Rule-based normalize (dates, numbers, phones, abbreviations, etc.)
+        Step 2: Post-processing cleanup
+        Step 3: English word pronunciation mapping (NO brackets — normal speed)
+        Step 4: LLM full-text normalization (if enabled)
+                - Handles remaining abbreviations, foreign words, symbols, punctuation
+                - Marks English spell-out abbreviations with {{SPELL}} markers
+        Step 5: Process spell-out markers → 【bracketed pronunciation】
+        Step 6: Double punctuation (experimental, if enabled)
+        Step 7: Final punctuation cleanup
+        Step 8: Sentence case normalization
+    """
     #logger.info(f"ORIGINAL INPUT: '{text}'")
     # Get the directory containing this file
     current_file_dir = Path(__file__).parent
-    norm_text = []
     
     # Load English pronunciation dictionary
     dict = load_dict_english(str(current_file_dir / "english_word_3_v3.txt"))
     
-    # Step 0: Pre-process special formats (currency, scientific notation, unicode math)
-    text = pre_normalize_special_formats(text)
+    # Load spell-out abbreviation word list (supplementary file)
+    spell_out_set = load_spell_out_words(str(current_file_dir / "spell_out_words.txt"))
     
     # Step 1: Rule-based normalize (existing pipeline)
+    # Note: pre_normalize_special_formats() removed — LLM handles those cases now
     text = normalize(text)
     """
     for sentence in sent_tokenize(text):
@@ -337,25 +435,35 @@ def normalize_vietnamese_text(text):
     text = '. '.join(norm_text)
     """
     #print(f'29: {text}')
+    
+    # Step 2: Post-processing cleanup
     text = post_processing(text)
     #print(f'30: {text}')
 
-    # Step 2: LLM post-processing for special tokens
-    # Must run BEFORE mapping_eng so that bracket markers from English
-    # transliterations don't get detected as residual special characters.
-    if USE_LLM_NORMALIZER:
-        text = apply_llm_normalization(text)
-
-    # Step 3: Apply English word pronunciations (creates 【..】 bracket markers)
+    # Step 3: Apply English word pronunciations (NO brackets — normal speed)
+    # Words from english_word_3_v3.txt are replaced inline without 【】 wrapping.
+    # They will be read at normal TTS speed (speed=1, step=32).
     text = mapping_eng(text, dict)
 
-    # Wrap hardcoded transliterations from replace_special_words in 【】 brackets
-    # These were transliterated early in the pipeline (before we could wrap them)
-    text = wrap_hardcoded_transliterations(text)
+    # Step 4: LLM full-text normalization
+    # Handles: remaining abbreviations, foreign words, special symbols, punctuation
+    # Marks spell-out abbreviations with {{SPELL}}ABC{{/SPELL}}
+    if USE_LLM_NORMALIZER:
+        text = apply_llm_full_text_normalization(text)
+    
+    # Step 5: Process {{SPELL}} markers → 【bracketed pronunciation】
+    # Only these bracketed segments get slow speed (speed=0.4, step=64)
+    text = process_spell_out_markers(text, spell_out_set)
 
-    # Step 4: Final punctuation cleanup
+    # Step 6: Double punctuation (experimental)
+    # , → ,,   . → ..
+    if USE_DOUBLE_PUNCTUATION:
+        text = apply_double_punctuation(text)
+
+    # Step 7: Final punctuation cleanup
     text = fix_punctuation_spacing(text)
 
+    # Step 8: Sentence case
     text = normalize_sentence_case(text)
     logger.info(f"FINAL OUTPUT: '{text}'")
     

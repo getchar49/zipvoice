@@ -6,7 +6,7 @@ class TTSJobCreate(BaseModel):
     voice_id: str = Field("zipvoice1", description="ID from /v1/voices")
     speed: float = 1.0
     remove_long_sil: bool = False
-    num_step: Optional[int] = 16
+    num_step: Optional[int] = 32
     guidance_scale: Optional[float] = 1.0
     audio_type: Optional[str] = Field("mp3", description="Audio format: 'wav' or 'mp3'")
 
