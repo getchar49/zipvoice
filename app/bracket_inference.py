@@ -17,12 +17,20 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional, Callable
 
+import numpy as np
 import torch
 import torchaudio
+from pydub import AudioSegment
+from pydub.silence import detect_leading_silence
 
 from zipvoice.utils.infer import cross_fade_concat
 
 logger = logging.getLogger(__name__)
+
+# Silence gap durations (ms) based on trailing punctuation
+GAP_PERIOD_MS = 350    # After sentences ending with .
+GAP_COMMA_MS = 180     # After clauses ending with ,
+GAP_NONE_MS = 80       # Between segments with no punctuation boundary
 
 
 @dataclass
@@ -138,6 +146,101 @@ def parse_bracketed_text(text: str) -> List[TextSegment]:
 def has_brackets(text: str) -> bool:
     """Check if text contains any 【X】 bracket markers."""
     return bool(re.search(r'【[a-zA-Z\u00C0-\u1EF9][^】]{0,49}】', text))
+
+
+def _detect_trailing_punctuation(text: str) -> str:
+    """
+    Detect the trailing punctuation of a segment text.
+    
+    Returns:
+        'period' if text ends with . (or similar sentence-ending)
+        'comma' if text ends with , (or similar clause-ending)
+        'none' if no trailing punctuation
+    """
+    stripped = text.rstrip()
+    if not stripped:
+        return 'none'
+    last_char = stripped[-1]
+    if last_char in '.!?':
+        return 'period'
+    elif last_char in ',;:':
+        return 'comma'
+    return 'none'
+
+
+def _normalize_segment_silence(
+    wav: torch.Tensor,
+    sampling_rate: int,
+    gap_ms: int,
+    trim_leading: bool = True,
+    trim_trailing: bool = True,
+    keep_leading_ms: int = 30,
+    keep_trailing_ms: int = 30,
+    silence_thresh_db: float = -40.0,
+) -> torch.Tensor:
+    """
+    Trim excess leading/trailing silence from an audio segment,
+    then append a standardized silence gap.
+    
+    Args:
+        wav: Audio tensor (C, T).
+        sampling_rate: Sample rate.
+        gap_ms: Silence gap to append at the end (ms).
+        trim_leading: Whether to trim leading silence.
+        trim_trailing: Whether to trim trailing silence.
+        keep_leading_ms: Minimum leading silence to keep (ms).
+        keep_trailing_ms: Minimum trailing silence to keep (ms).
+        silence_thresh_db: dBFS threshold for silence detection.
+        
+    Returns:
+        Processed audio tensor (C, T') with standardized silence.
+    """
+    # Convert tensor → pydub AudioSegment
+    audio_np = wav.cpu().numpy()
+    if audio_np.ndim == 1:
+        audio_np = audio_np[np.newaxis, :]
+    channels = audio_np.shape[0]
+    
+    # Interleave channels for pydub
+    if channels > 1:
+        interleaved = audio_np.transpose(1, 0).flatten()
+    else:
+        interleaved = audio_np.flatten()
+    
+    audio_int16 = (interleaved * 32768.0).clip(-32768, 32767).astype(np.int16)
+    aseg = AudioSegment(
+        data=audio_int16.tobytes(),
+        sample_width=2,
+        frame_rate=sampling_rate,
+        channels=channels,
+    )
+    
+    # Trim leading silence
+    if trim_leading and len(aseg) > 0:
+        leading_sil = detect_leading_silence(aseg, silence_threshold=silence_thresh_db)
+        trim_start = max(0, leading_sil - keep_leading_ms)
+        if trim_start > 0:
+            aseg = aseg[trim_start:]
+    
+    # Trim trailing silence
+    if trim_trailing and len(aseg) > 0:
+        reversed_aseg = aseg.reverse()
+        trailing_sil = detect_leading_silence(reversed_aseg, silence_threshold=silence_thresh_db)
+        trim_end = max(0, trailing_sil - keep_trailing_ms)
+        if trim_end > 0 and trim_end < len(aseg):
+            aseg = aseg[:-trim_end]
+    
+    # Append gap silence
+    if gap_ms > 0:
+        aseg = aseg + AudioSegment.silent(duration=gap_ms, frame_rate=sampling_rate)
+    
+    # Convert back to tensor
+    result_np = np.array(aseg.get_array_of_samples()).astype(np.float32) / 32768.0
+    if channels > 1:
+        result_np = result_np.reshape(-1, channels).transpose(1, 0)
+        return torch.from_numpy(result_np)
+    else:
+        return torch.from_numpy(result_np).unsqueeze(0)
 
 
 @torch.inference_mode()
@@ -286,6 +389,31 @@ def generate_sentence_with_brackets(
             if sr != sampling_rate:
                 resampler = torchaudio.transforms.Resample(sr, sampling_rate)
                 wav = resampler(wav)
+
+            # Normalize silence: trim excess, add punctuation-aware gap
+            is_last_segment = (i == len(segments) - 1)
+            if is_last_segment:
+                # Last segment: trim but don't add trailing gap
+                wav = _normalize_segment_silence(
+                    wav, sampling_rate, gap_ms=0,
+                    trim_leading=True, trim_trailing=True,
+                )
+            else:
+                # Determine gap from trailing punctuation of this segment
+                punct_type = _detect_trailing_punctuation(seg.text)
+                if punct_type == 'period':
+                    gap_ms = GAP_PERIOD_MS
+                elif punct_type == 'comma':
+                    gap_ms = GAP_COMMA_MS
+                else:
+                    gap_ms = GAP_NONE_MS
+                wav = _normalize_segment_silence(
+                    wav, sampling_rate, gap_ms=gap_ms,
+                    trim_leading=True, trim_trailing=True,
+                )
+                logger.debug(f"[Bracket Inference] Segment {i+1}: "
+                             f"punct='{punct_type}', gap={gap_ms}ms")
+
             segment_wavs.append(wav)
 
         except Exception as e:

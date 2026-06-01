@@ -36,23 +36,28 @@ class TextNormalizer():
         return separated_sentence
 
     def replace_special_words(self, input_str):
-        dict_map = {
-            r'\bAI\b': 'ây ai',
-            r'\bKIA\b': 'ki a',
-            r'\bIT\b': 'ai ti'
-        }
-        for pattern, replacement in dict_map.items():
-            input_str = re.sub(pattern, replacement, input_str)
+        # Hard-coded mappings disabled — LLM full-text normalization handles these now.
+        # dict_map = {
+        #     r'\bAI\b': 'ây ai',
+        #     r'\bKIA\b': 'ki a',
+        #     r'\bIT\b': 'ai ti'
+        # }
+        # for pattern, replacement in dict_map.items():
+        #     input_str = re.sub(pattern, replacement, input_str)
         return input_str
 
     def remove_special_characters_v1(self, input_str):
         input_str = ' ' + input_str + ' '
-        # Convert pause-type punctuation to commas before removing
-        input_str = input_str.replace('…', ',')
+        # Convert pause-type punctuation — ellipsis to period, dashes to comma
+        input_str = input_str.replace('…', '.')
+        input_str = re.sub(r'\.{3,}', '.', input_str)  # literal ... → .
         input_str = input_str.replace('—', ',')
         input_str = input_str.replace('–', ',')
+        # Parentheses → comma for natural pause
+        input_str = re.sub(r'\(', ', ', input_str)
+        input_str = re.sub(r'\)', ', ', input_str)
 #         punct = '! " “ \' ( ) ; [ ] * _ ` { | } ~ … 》 ≧ ≦ –  ‘ ’ · 】 ◇◆ ㅁ • ” `` '' ” ● ︶ ︶ ● † ⬔'.split()
-        punct = '" “ \' ( ) [ ] * _ ` { ~ } 》 ≧ ≦ ‘ ’ · 】 ◇◆ ㅁ • ” `` '' ” ● ︶ ︶ ● † ⬔'.split()
+        punct = '" “ \' [ ] * _ ` { ~ } 》 ≧ ≦ ‘ ’ · 】 ◇◆ ㅁ • ” `` '' ” ● ︶ ︶ ● † ⬔'.split()
         for e in punct:
             e = e.strip()
             input_str = input_str.replace(e, ' ')
@@ -173,9 +178,18 @@ class TextNormalizer():
     
     def _url_to_speech(self, url):
         """
-        Convert URL to spoken form.
-        https://www.example.com -> 'example chấm com'
+        Convert URL to spoken form, including protocol.
+        https://www.example.com -> 'ách ti ti pi ét ét example chấm com'
         """
+        from app.normalizer.english_letters import spell_out_abbreviation
+        
+        # Extract and speak protocol letter-by-letter
+        protocol_spoken = ''
+        protocol_match = re.match(r'^(https?|ftp)://', url)
+        if protocol_match:
+            proto = protocol_match.group(1).upper()  # HTTPS, HTTP, FTP
+            protocol_spoken = spell_out_abbreviation(proto) + ', '
+        
         # Remove protocol
         url_clean = re.sub(r'^(https?|ftp)://', '', url)
         # Remove www.
@@ -184,7 +198,7 @@ class TextNormalizer():
         url_clean = url_clean.rstrip('/')
         
         spoken = self._convert_segment_to_speech(url_clean)
-        return f' {spoken} '
+        return f' {protocol_spoken}{spoken} '
     
     def _convert_segment_to_speech(self, segment):
         """

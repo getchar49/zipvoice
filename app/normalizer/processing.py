@@ -126,7 +126,9 @@ def normalize(text):
 
 def post_processing(text):
     text = re.sub('\s+', ' ', text)
-    text = re.sub('\.\.\s', '. ', text)
+    # Normalize 2+ consecutive dots to single dot + space
+    # This runs BEFORE double punctuation, so single dots are preserved for that feature
+    text = re.sub(r'\.{2,}\s*', '. ', text)
     #text  = text.lower()
     return text
 
@@ -139,6 +141,11 @@ def fix_punctuation_spacing(text):
     """
     # Remove space BEFORE period/comma/semicolon/colon (but preserve 【】 brackets)
     text = re.sub(r'\s+([.,;:!?])', r'\1', text)
+    # Deduplicate consecutive punctuation: ,, → , and ,. → . (period wins)
+    text = re.sub(r'[,;:]+\.', '.', text)       # comma-like + period → period
+    text = re.sub(r'\.[,;:]+', '.', text)       # period + comma-like → period
+    text = re.sub(r',{2,}', ',', text)          # ,, → ,
+    text = re.sub(r'\.{2,}', '.', text)         # .. → .
     # Ensure space AFTER period/comma/semicolon (when followed by a word char or bracket)
     text = re.sub(r'([.,;:!?])(?=[a-zA-Z\u00C0-\u1EF9【])', r'\1 ', text)
     # Collapse multiple spaces
@@ -382,16 +389,17 @@ def apply_double_punctuation(text: str) -> str:
 def wrap_hardcoded_transliterations(text):
     """
     Wrap known transliterations from replace_special_words() in 【】 brackets.
-    These were converted early in the pipeline before brackets could be added.
+    Disabled — replace_special_words hard-codes are now commented out.
+    LLM full-text normalization handles these cases instead.
     """
-    # Map of transliterations created by replace_special_words
-    hardcoded = {
-        r'\bây ai\b': '【ây ai】',
-        r'\bki a\b': '【ki a】',
-        r'\bai ti\b': '【ai ti】',
-    }
-    for pattern, replacement in hardcoded.items():
-        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    # Hard-coded mappings disabled — LLM handles these now
+    # hardcoded = {
+    #     r'\bây ai\b': '【ây ai】',
+    #     r'\bki a\b': '【ki a】',
+    #     r'\bai ti\b': '【ai ti】',
+    # }
+    # for pattern, replacement in hardcoded.items():
+    #     text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     return text
 
 

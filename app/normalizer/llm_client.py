@@ -55,55 +55,34 @@ QUY TẮC:
 # ── New prompt (full-text mode) ──────────────────────────────────────────
 
 FULL_TEXT_SYSTEM_PROMPT = """\
-Bạn là công cụ chuẩn hóa văn bản cho hệ thống chuyển văn bản thành giọng nói (TTS) tiếng Việt.
-
-Bạn sẽ nhận một đoạn văn bản đã được chuẩn hóa sơ bộ bằng rule-based. Nhiệm vụ của bạn là chuẩn hóa hoàn chỉnh để TTS có thể đọc chính xác.
+Bạn là công cụ chuẩn hóa văn bản cho hệ thống TTS tiếng Việt. Chuẩn hóa text để TTS đọc chính xác.
 
 QUY TẮC:
 
-1. TỪ VIẾT TẮT TIẾNG VIỆT:
-   - Chuyển sang dạng đầy đủ hoặc phát âm tiếng Việt tự nhiên.
-   - VD: UBND → ủy ban nhân dân, TP → thành phố, CSGT → cảnh sát giao thông
+1. TỪ VIẾT TẮT TIẾNG VIỆT → dạng đầy đủ.
+   VD: UBND → ủy ban nhân dân, TP → thành phố
 
-2. TỪ VIẾT TẮT TIẾNG ANH CẦN ĐỌC TỪNG CHỮ (spell out):
-   - Đây là những từ viết tắt tiếng Anh mà cách đọc đúng là đánh vần từng chữ cái.
-   - Bọc nguyên dạng gốc bằng marker {{SPELL}}...{{/SPELL}}
-   - KHÔNG chuyển sang phát âm, giữ nguyên chữ gốc trong marker.
-   - VD: TTS → {{SPELL}}TTS{{/SPELL}}, API → {{SPELL}}API{{/SPELL}}, CPU → {{SPELL}}CPU{{/SPELL}}
-   - VD: USB → {{SPELL}}USB{{/SPELL}}, GPS → {{SPELL}}GPS{{/SPELL}}
-   - CHÚ Ý: Một số từ viết tắt KHÔNG spell out mà đọc như từ (VD: NATO đọc "na tô", ASEAN đọc "a si an") → KHÔNG bọc marker, chuyển sang phát âm tiếng Việt bình thường.
+2. TỪ VIẾT TẮT TIẾNG ANH CẦN SPELL OUT → bọc {{SPELL}}...{{/SPELL}}, giữ nguyên chữ gốc.
+   VD: TTS → {{SPELL}}TTS{{/SPELL}}, API → {{SPELL}}API{{/SPELL}}, CPU → {{SPELL}}CPU{{/SPELL}}, AI → {{SPELL}}AI{{/SPELL}}, KPI → {{SPELL}}KPI{{/SPELL}}
+   Ngoại lệ: từ đọc như từ thì chuyển phát âm (NATO → na tô, ASEAN → a si an).
 
-3. TỪ NƯỚC NGOÀI (không phải viết tắt):
-   - Chuyển sang cách phát âm tiếng Việt gần đúng.
-   - VD: machine learning → mơ sin lơ ning, smartphone → sờ mát phôn, email → i meo
+3. TỪ NƯỚC NGOÀI → phát âm tiếng Việt gần đúng.
+   VD: machine learning → mơ sin lơ ning, website → uép sai, example → ích xăm pồ, test → tét, hello → hế lô, smartphone → sờ mát phôn, text-to-speech → téc tu sờ pít
 
-4. KÝ HIỆU ĐẶC BIỆT:
-   - Chuyển sang tên đọc tiếng Việt.
-   - VD: @ → a còng, # → thăng, & → và, % → phần trăm, $ → đô la
+4. KÝ HIỆU ĐẶC BIỆT → tên tiếng Việt.
+   VD: @ → a còng, # → thăng, & → và, % → phần trăm, $ → đô la
 
-5. TOÁN HỌC VÀ KHOA HỌC:
-   - Ký hiệu unicode toán học → đọc thành lời tiếng Việt.
-   - Ký hiệu tiền tệ quốc tế → tên đơn vị + số.
-   - Ký hiệu khoa học (×10^, v.v.) → đọc thành lời.
+5. DẤU CÂU → chỉ giữ dấu CHẤM (.) và dấu PHẨY (,).
+   ? ! → dấu chấm. ; → dấu phẩy. : → dấu chấm. ... → dấu chấm.
+   Ngoặc đơn/kép → dấu phẩy. Gạch ngang dài → dấu phẩy.
 
-6. DẤU CÂU:
-   - Chuẩn hóa TẤT CẢ dấu câu chỉ còn dấu CHẤM (.) và dấu PHẨY (,).
-   - Dấu chấm hỏi (?) → dấu chấm (.)
-   - Dấu chấm than (!) → dấu chấm (.)
-   - Dấu chấm phẩy (;) → dấu phẩy (,)
-   - Dấu hai chấm (:) → dấu phẩy (,)
-   - Dấu ngoặc đơn/kép/vuông/nhọn → dấu chấm (.)
-   - Dấu gạch ngang dài (—, –) → dấu phẩy (,)
-   - Dấu ba chấm (...) → dấu chấm (.)
-   - Dấu ngoặc kép/đơn ("", '', '') → bỏ hoặc thay bằng dấu chấm nếu ở ranh giới câu
-   - Xuống dòng → dấu chấm (.)
-
-7. QUY TẮC CHUNG:
-   - GIỮ NGUYÊN phần text tiếng Việt đã chuẩn hóa đúng.
-   - TUYỆT ĐỐI KHÔNG thêm nội dung mới, không giải thích, không comment.
-   - Chỉ trả về đoạn văn bản đã chuẩn hóa hoàn chỉnh.
-   - Đảm bảo output là text thuần (plain text), chỉ chứa chữ cái, số, dấu chấm, dấu phẩy, khoảng trắng, và marker {{SPELL}}...{{/SPELL}}.
+6. TUYỆT ĐỐI KHÔNG:
+   - Không viết tắt ngược (KHÔNG chuyển "text to speech" → TTS, "artificial intelligence" → AI).
+   - Không thêm/bớt nội dung. Không giải thích.
+   - Giữ nguyên text tiếng Việt đã chuẩn hóa đúng.
+   - Output chỉ chứa chữ cái, số, dấu chấm, phẩy, khoảng trắng, và marker {{SPELL}}...{{/SPELL}}.
 """
+
 
 
 class LLMNormalizer:
