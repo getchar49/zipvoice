@@ -336,7 +336,8 @@ def process_spell_out_markers(text: str, spell_out_set: set = None) -> str:
         → "Hệ thống 【ti ti ét】 rất tốt"
     """
     # 1. Process {{SPELL}}...{{/SPELL}} markers from LLM
-    spell_pattern = re.compile(r'\{\{SPELL\}\}([A-Za-z]+)\{\{/SPELL\}\}')
+    # Match alphanumeric content (VVS1, S2) and multi-word (cron job)
+    spell_pattern = re.compile(r'\{\{SPELL\}\}([A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)*)\{\{/SPELL\}\}')
     
     def replace_spell_marker(match):
         abbr = match.group(1)
@@ -419,7 +420,7 @@ def normalize_vietnamese_text(text):
         Step 7: Final punctuation cleanup
         Step 8: Sentence case normalization
     """
-    #logger.info(f"ORIGINAL INPUT: '{text}'")
+    logger.info(f"ORIGINAL INPUT: '{text}'")
     # Get the directory containing this file
     current_file_dir = Path(__file__).parent
     
@@ -442,16 +443,16 @@ def normalize_vietnamese_text(text):
     
     text = '. '.join(norm_text)
     """
-    #print(f'29: {text}')
     
     # Step 2: Post-processing cleanup
     text = post_processing(text)
-    #print(f'30: {text}')
+    logger.info(f"[Rule-based] Result: '{text}'")
 
     # Step 3: Apply English word pronunciations (NO brackets — normal speed)
     # Words from english_word_3_v3.txt are replaced inline without 【】 wrapping.
     # They will be read at normal TTS speed (speed=1, step=32).
     text = mapping_eng(text, dict)
+    logger.info(f"[Mapping Eng] Result (LLM input): '{text}'")
 
     # Step 4: LLM full-text normalization
     # Handles: remaining abbreviations, foreign words, special symbols, punctuation
@@ -462,6 +463,7 @@ def normalize_vietnamese_text(text):
     # Step 5: Process {{SPELL}} markers → 【bracketed pronunciation】
     # Only these bracketed segments get slow speed (speed=0.4, step=64)
     text = process_spell_out_markers(text, spell_out_set)
+    logger.info(f"[Spell-out] Result: '{text}'")
 
     # Step 6: Double punctuation (experimental)
     # , → ,,   . → ..

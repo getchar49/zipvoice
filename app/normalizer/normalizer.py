@@ -51,7 +51,11 @@ class TextNormalizer():
         # Convert pause-type punctuation — ellipsis to period, dashes to comma
         input_str = input_str.replace('…', '.')
         input_str = re.sub(r'\.{3,}', '.', input_str)  # literal ... → .
+        # Em-dash (—) → comma (pause), but preserve between digits for range detection
+        input_str = re.sub(r'(?<=\d)\s*—\s*(?=\d)', '-', input_str)  # 75—88 → 75-88
         input_str = input_str.replace('—', ',')
+        # En-dash (–) → preserve as hyphen between digits for range detection, comma otherwise
+        input_str = re.sub(r'(?<=\d)\s*–\s*(?=\d)', '-', input_str)  # 75–88 → 75-88
         input_str = input_str.replace('–', ',')
         # Parentheses → comma for natural pause
         input_str = re.sub(r'\(', ', ', input_str)
