@@ -48,6 +48,8 @@ def normalize(text):
     text = normalizer.replace_special_words(text)
     # text = normalizer.remove_emoticons(text)
     # print(f'1: {text}')
+    # Normalize NUMBER%/UNIT patterns (e.g. 8,5%/năm) BEFORE verbatim/unit processing
+    text = normalizer.normalize_percent_unit(text)
     # Convert verbatim symbols to words BEFORE removing special characters (Bug 6)
     text = normalizer.norm_tag_verbatim(text)
     #print(f'verbatim: {text}')

@@ -28,9 +28,13 @@ from zipvoice.utils.infer import cross_fade_concat
 logger = logging.getLogger(__name__)
 
 # Silence gap durations (ms) based on trailing punctuation
-GAP_PERIOD_MS = 350    # After sentences ending with .
-GAP_COMMA_MS = 180     # After clauses ending with ,
-GAP_NONE_MS = 80       # Between segments with no punctuation boundary
+GAP_PERIOD_MS = 500    # After sentences ending with .
+GAP_COMMA_MS = 300     # After clauses ending with ,
+GAP_NONE_MS = 150      # Between segments with no punctuation boundary
+
+# Short segment threshold: NORMAL segments with ≤ this many words
+# are generated with bracket (slow) speed/step for clarity
+SHORT_SEGMENT_MAX_WORDS = 2
 
 
 @dataclass
@@ -338,9 +342,24 @@ def generate_sentence_with_brackets(
     done_segments = 0
 
     for i, seg in enumerate(segments):
-        seg_speed = bracket_speed if seg.is_bracket else speed
-        seg_step = bracket_num_step if seg.is_bracket else num_step
-        seg_type = "BRACKET" if seg.is_bracket else "NORMAL"
+        # Determine speed/step: bracket segments always slow,
+        # short normal segments (≤ SHORT_SEGMENT_MAX_WORDS words) also use slow speed
+        word_count = len(seg.text.split()) if not seg.is_bracket else 0
+        is_short_normal = (not seg.is_bracket and word_count <= SHORT_SEGMENT_MAX_WORDS)
+        
+        if seg.is_bracket or is_short_normal:
+            seg_speed = bracket_speed
+            seg_step = bracket_num_step
+        else:
+            seg_speed = speed
+            seg_step = num_step
+        
+        if seg.is_bracket:
+            seg_type = "BRACKET"
+        elif is_short_normal:
+            seg_type = "SHORT"
+        else:
+            seg_type = "NORMAL"
 
         # Skip segments with no speakable content (only punctuation/whitespace)
         speakable = re.sub(r'[\s.,;:!?…—–\-\'"()\[\]{}]', '', seg.text)
@@ -436,7 +455,7 @@ def generate_sentence_with_brackets(
     # Cross-fade concatenate all segments
     if segment_wavs:
         final_wav = cross_fade_concat(
-            segment_wavs, fade_duration=0.1, sample_rate=sampling_rate
+            segment_wavs, fade_duration=0.02, sample_rate=sampling_rate
         )
     else:
         final_wav = torch.zeros(1, sampling_rate)  # 1s silence fallback

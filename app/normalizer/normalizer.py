@@ -35,6 +35,47 @@ class TextNormalizer():
         separated_sentence = re.sub(r'(\d)(?=[^\d.,h:])|(?<=[^\d.,h:])(\d)', r'\1 \2', sentence)
         return separated_sentence
 
+    def normalize_percent_unit(self, input_str):
+        """
+        Normalize NUMBER%/UNIT patterns like '8,5%/năm' → '8,5 phần trăm trên năm'.
+        
+        Must run BEFORE norm_tag_verbatim() and norm_unit() because:
+        - norm_tag_verbatim's regex doesn't match % followed by /
+        - norm_unit's regex doesn't match % followed by /
+        - Without this, the % and /unit get lost in later processing steps.
+        
+        Also handles compound unit patterns like kWh/kWp/năm.
+        """
+        # Map of known /unit suffixes to Vietnamese
+        unit_map = {
+            'năm': 'trên năm',
+            'tháng': 'trên tháng',
+            'ngày': 'trên ngày',
+            'giờ': 'trên giờ',
+            'phút': 'trên phút',
+            'giây': 'trên giây',
+            'tuần': 'trên tuần',
+            'quý': 'trên quý',
+        }
+        unit_alternatives = '|'.join(re.escape(u) for u in unit_map.keys())
+        
+        # Pattern: NUMBER%/unit (e.g. 8,5%/năm, 10,2%/năm)
+        # NUMBER can be integer or decimal with comma (Vietnamese) or dot
+        p = re.compile(
+            r'(\d+(?:[.,]\d+)?)\s*%\s*/\s*(' + unit_alternatives + r')'
+            r'(?=[\s.,;:!?\)\]\}]|$)',
+            re.IGNORECASE
+        )
+        
+        def replace_match(m):
+            number = m.group(1)
+            unit_key = m.group(2)
+            unit_spoken = unit_map.get(unit_key, 'trên ' + unit_key)
+            return number + ' phần trăm ' + unit_spoken
+        
+        input_str = p.sub(replace_match, input_str)
+        return input_str
+
     def replace_special_words(self, input_str):
         # Hard-coded mappings disabled — LLM full-text normalization handles these now.
         # dict_map = {

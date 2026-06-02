@@ -12,3 +12,4 @@ walkthrough.md
 implementation_plan*.md
 logs/
 app/normalizer/english_word_3_v3*.txt
+*.wav
