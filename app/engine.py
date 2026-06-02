@@ -12,6 +12,8 @@ from zipvoice.bin.infer_zipvoice import (
 )
 from app.normalizer.processing import normalize_vietnamese_text
 from app.bracket_inference import has_brackets, generate_sentence_with_brackets
+from app.cached_inference import generate_sentence_cached
+from zipvoice.utils.infer import load_prompt_wav, remove_silence, rms_norm
 
 from .settings import (
     RESULTS_DIR, MODEL_NAME, ZIPVOICE_MODEL_DIR, VOCOS_LOCAL_DIR,
@@ -90,6 +92,36 @@ class ZipVoiceEngine:
 
         self.queue: asyncio.Queue[str] = asyncio.Queue()
         self.jobs : Dict[str, TTSJob] = {}
+
+        # Pre-compute prompt tensors for all registered voices
+        self._warm_voice_cache()
+
+    def _warm_voice_cache(self):
+        """Pre-compute prompt tensors for all registered voices.
+        
+        For each voice, loads the prompt wav, removes silence, normalizes RMS,
+        and extracts features. Results are cached on the Voice object to
+        avoid redundant I/O on every inference call.
+        """
+        for voice in self.registry._voices.values():
+            try:
+                wav = load_prompt_wav(voice.prompt_wav, sampling_rate=self.sampling_rate)
+                wav = remove_silence(wav, self.sampling_rate, only_edge=False, trail_sil=200)
+                wav, rms = rms_norm(wav, target_rms=0.1)
+                features = self.feature_extractor.extract(
+                    wav, sampling_rate=self.sampling_rate
+                )
+                features = features.unsqueeze(0) * 0.1  # feat_scale
+                
+                voice.cached_wav_tensor = wav
+                voice.cached_prompt_rms = rms.item() if isinstance(rms, torch.Tensor) else rms
+                voice.cached_prompt_features = features
+                
+                print(f"[Voice Cache] Cached '{voice.voice_id}': "
+                      f"wav={wav.shape}, features={features.shape}")
+            except Exception as e:
+                print(f"[Voice Cache] WARNING: Failed to cache '{voice.voice_id}': {e}")
+                # Will fall back to file-based loading at inference time
 
     def get_job(self, job_id: str) -> Optional[TTSJob]:
         if job_id in self.jobs:
@@ -225,48 +257,100 @@ class ZipVoiceEngine:
         try:
             with autocast(device_type=self.device.type):
                 with torch.inference_mode():
+                    # Determine if we can use cached inference
+                    use_cached = (voice.cached_wav_tensor is not None 
+                                  and voice.cached_prompt_features is not None)
+                    
                     if has_brackets(input_text):
                         # Use bracket-aware inference for text with 【X】 markers
-                        _ = generate_sentence_with_brackets(
-                            save_path=job.out_wav_path,
-                            prompt_text=voice.prompt_text,
-                            prompt_wav=voice.prompt_wav,
-                            text=input_text,
-                            model=self.model,
-                            vocoder=self.vocoder,
-                            tokenizer=self.tokenizer,
-                            feature_extractor=self.feature_extractor,
-                            device=self.device,
-                            num_step=num_step,
-                            guidance_scale=guidance,
-                            speed=job.speed,
-                            sampling_rate=self.sampling_rate,
-                            max_duration=MAX_DURATION,
-                            remove_long_sil=job.remove_long_sil,
-                            progress_cb=on_progress,
-                            bracket_speed=BRACKET_SPEED,
-                            bracket_num_step=BRACKET_NUM_STEP,
-                        )
+                        if use_cached:
+                            from app.bracket_inference import generate_sentence_with_brackets_cached
+                            _ = generate_sentence_with_brackets_cached(
+                                save_path=job.out_wav_path,
+                                prompt_text=voice.prompt_text,
+                                prompt_wav_tensor=voice.cached_wav_tensor,
+                                prompt_rms=voice.cached_prompt_rms,
+                                prompt_features=voice.cached_prompt_features,
+                                text=input_text,
+                                model=self.model,
+                                vocoder=self.vocoder,
+                                tokenizer=self.tokenizer,
+                                feature_extractor=self.feature_extractor,
+                                device=self.device,
+                                num_step=num_step,
+                                guidance_scale=guidance,
+                                speed=job.speed,
+                                sampling_rate=self.sampling_rate,
+                                max_duration=MAX_DURATION,
+                                remove_long_sil=job.remove_long_sil,
+                                progress_cb=on_progress,
+                                bracket_speed=BRACKET_SPEED,
+                                bracket_num_step=BRACKET_NUM_STEP,
+                            )
+                        else:
+                            _ = generate_sentence_with_brackets(
+                                save_path=job.out_wav_path,
+                                prompt_text=voice.prompt_text,
+                                prompt_wav=voice.prompt_wav,
+                                text=input_text,
+                                model=self.model,
+                                vocoder=self.vocoder,
+                                tokenizer=self.tokenizer,
+                                feature_extractor=self.feature_extractor,
+                                device=self.device,
+                                num_step=num_step,
+                                guidance_scale=guidance,
+                                speed=job.speed,
+                                sampling_rate=self.sampling_rate,
+                                max_duration=MAX_DURATION,
+                                remove_long_sil=job.remove_long_sil,
+                                progress_cb=on_progress,
+                                bracket_speed=BRACKET_SPEED,
+                                bracket_num_step=BRACKET_NUM_STEP,
+                            )
                     else:
-                        # Standard inference for text without brackets
-                        _ = generate_sentence(
-                            save_path=job.out_wav_path,
-                            prompt_text=voice.prompt_text,
-                            prompt_wav=voice.prompt_wav,
-                            text=input_text,
-                            model=self.model,
-                            vocoder=self.vocoder,
-                            tokenizer=self.tokenizer,
-                            feature_extractor=self.feature_extractor,
-                            device=self.device,
-                            num_step=num_step,
-                            guidance_scale=guidance,
-                            speed=job.speed,
-                            sampling_rate=self.sampling_rate,
-                            max_duration=MAX_DURATION,
-                            remove_long_sil=job.remove_long_sil,
-                            progress_cb=on_progress,
-                        )
+                        if use_cached:
+                            # Cached inference — skip prompt I/O
+                            _ = generate_sentence_cached(
+                                save_path=job.out_wav_path,
+                                prompt_text=voice.prompt_text,
+                                prompt_wav_tensor=voice.cached_wav_tensor,
+                                prompt_rms=voice.cached_prompt_rms,
+                                prompt_features=voice.cached_prompt_features,
+                                text=input_text,
+                                model=self.model,
+                                vocoder=self.vocoder,
+                                tokenizer=self.tokenizer,
+                                feature_extractor=self.feature_extractor,
+                                device=self.device,
+                                num_step=num_step,
+                                guidance_scale=guidance,
+                                speed=job.speed,
+                                sampling_rate=self.sampling_rate,
+                                max_duration=MAX_DURATION,
+                                remove_long_sil=job.remove_long_sil,
+                                progress_cb=on_progress,
+                            )
+                        else:
+                            # Fallback: standard file-based inference
+                            _ = generate_sentence(
+                                save_path=job.out_wav_path,
+                                prompt_text=voice.prompt_text,
+                                prompt_wav=voice.prompt_wav,
+                                text=input_text,
+                                model=self.model,
+                                vocoder=self.vocoder,
+                                tokenizer=self.tokenizer,
+                                feature_extractor=self.feature_extractor,
+                                device=self.device,
+                                num_step=num_step,
+                                guidance_scale=guidance,
+                                speed=job.speed,
+                                sampling_rate=self.sampling_rate,
+                                max_duration=MAX_DURATION,
+                                remove_long_sil=job.remove_long_sil,
+                                progress_cb=on_progress,
+                            )
                 
                 if job.status == "cancelled":
                     raise JobCancelledError("Job cancelled at finalization.")

@@ -1,20 +1,27 @@
 import os
 import json # Added import
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional # Added Optional
+
+import torch
 
 from .settings import VOICES_DIR
 
-@dataclass(frozen=True)
+@dataclass
 class Voice:
     voice_id: str
     prompt_wav: str
     prompt_text: str
-    # New fields for metadata
+    # Metadata fields
     name: str
     gender: str
     region: str
     language: str
+    # Cached tensors — populated by engine._warm_voice_cache() at startup.
+    # Avoids re-loading prompt.wav from disk on every inference call.
+    cached_wav_tensor: Optional[torch.Tensor] = field(default=None, repr=False)
+    cached_prompt_rms: Optional[float] = field(default=None, repr=False)
+    cached_prompt_features: Optional[torch.Tensor] = field(default=None, repr=False)
 
 class VoiceRegistry:
     def __init__(self, root: str = VOICES_DIR):

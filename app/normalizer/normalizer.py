@@ -1666,6 +1666,7 @@ class TextNormalizer():
         return input_str
     
     def norm_unit(self, input_str):
+        from app.normalizer.units import CASE_SENSITIVE_UNITS
         out = input_str
         MULTIPLIERS = r'(?:chục|trăm|nghìn|ngàn|triệu|tỷ)'
         PUNCT_CLASS = r'(?:\s|[.,;:)\]\}!?\-"\'…/]|$)'
@@ -1680,7 +1681,11 @@ class TextNormalizer():
 
             term_esc = re.escape(term)  
             pattern = rf'(?P<num>[+-]?\d+(?:[.,]\d+)*)\s*(?P<mult>{MULTIPLIERS}\s*)?{term_esc}(?={PUNCT_CLASS})'
-            prog = re.compile(pattern, re.IGNORECASE)
+            
+            # Case-sensitive matching for units where case matters
+            # (e.g., mPa vs MPa, KB vs Mb vs MB)
+            flags = 0 if term in CASE_SENSITIVE_UNITS else re.IGNORECASE
+            prog = re.compile(pattern, flags)
 
             def repl(m):
                 num = m.group('num')

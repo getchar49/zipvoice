@@ -429,13 +429,16 @@ def normalize_vietnamese_text(text):
         Step 1: Rule-based normalize (dates, numbers, phones, abbreviations, etc.)
         Step 2: Post-processing cleanup
         Step 3: English word pronunciation mapping (NO brackets — normal speed)
-        Step 4: LLM full-text normalization (if enabled)
-                - Handles remaining abbreviations, foreign words, symbols, punctuation
-                - Marks English spell-out abbreviations with {{SPELL}} markers
-        Step 5: Process spell-out markers → 【bracketed pronunciation】
-        Step 6: Double punctuation (experimental, if enabled)
-        Step 7: Final punctuation cleanup
-        Step 8: Sentence case normalization
+        Step 4: Dictionary cache lookup — replace known English words from previous runs
+        Step 5: LLM structured extraction (if enabled)
+                - Extracts acronyms and English-Vietnamese phonetic pairs
+                - Updates dictionary cache with new pairs
+                - Replaces English words in text per LLM pairs
+                - Wraps acronyms in 【bracketed pronunciation】 with trailing comma
+        Step 6: Process remaining spell-out markers → 【bracketed pronunciation】
+        Step 7: Double punctuation (experimental, if enabled)
+        Step 8: Final punctuation cleanup
+        Step 9: Sentence case normalization
     """
     logger.info(f"ORIGINAL INPUT: '{text}'")
     # Get the directory containing this file
@@ -448,18 +451,7 @@ def normalize_vietnamese_text(text):
     spell_out_set = load_spell_out_words(str(current_file_dir / "spell_out_words.txt"))
     
     # Step 1: Rule-based normalize (existing pipeline)
-    # Note: pre_normalize_special_formats() removed — LLM handles those cases now
     text = normalize(text)
-    """
-    for sentence in sent_tokenize(text):
-        sentence = sentence.strip('.').strip()
-        if not sentence:
-            continue
-        sentence = normalize(sentence)
-        norm_text.append(sentence)
-    
-    text = '. '.join(norm_text)
-    """
     
     # Step 2: Post-processing cleanup
     text = post_processing(text)
@@ -467,30 +459,74 @@ def normalize_vietnamese_text(text):
 
     # Step 3: Apply English word pronunciations (NO brackets — normal speed)
     # Words from english_word_3_v3.txt are replaced inline without 【】 wrapping.
-    # They will be read at normal TTS speed (speed=1, step=32).
     text = mapping_eng(text, dict)
-    logger.info(f"[Mapping Eng] Result (LLM input): '{text}'")
+    logger.info(f"[Mapping Eng] Result: '{text}'")
 
-    # Step 4: LLM full-text normalization
-    # Handles: remaining abbreviations, foreign words, special symbols, punctuation
-    # Marks spell-out abbreviations with {{SPELL}}ABC{{/SPELL}}
+    # Step 4: Dictionary cache lookup — replace known English words from previous runs
+    from app.normalizer.dictionary_cache import get_dictionary_cache
+    dict_cache = get_dictionary_cache()
+    text = dict_cache.apply_to_text(text)
+    logger.info(f"[Dict Cache] Result (LLM input, {dict_cache.size} cached pairs): '{text}'")
+
+    # Step 5: LLM structured extraction
     if USE_LLM_NORMALIZER:
-        text = apply_llm_full_text_normalization(text)
-    
-    # Step 5: Process {{SPELL}} markers → 【bracketed pronunciation】
-    # Only these bracketed segments get slow speed (speed=0.4, step=64)
+        from app.normalizer.llm_client import get_llm_normalizer
+        from app.normalizer.english_letters import spell_out_abbreviation
+        
+        llm = get_llm_normalizer()
+        extraction = llm.extract_acronyms_and_pairs(text)
+        
+        acronyms = extraction.get("acronyms", [])
+        pairs = extraction.get("english_vietnamese_pairs", [])
+        
+        logger.info(f"[LLM Extract] acronyms={acronyms}, pairs={len(pairs)} items")
+        
+        # Step 5a: Update dictionary cache with new pairs
+        if pairs:
+            dict_cache.update_pairs(pairs)
+        
+        # Step 5b: Replace English words in text per LLM pairs
+        for pair in pairs:
+            eng = pair.get("english_word", "")
+            vie = pair.get("vietnamese_spelling", "")
+            if eng and vie:
+                text = re.sub(
+                    r'\b' + re.escape(eng) + r'\b',
+                    vie,
+                    text,
+                    flags=re.IGNORECASE
+                )
+        logger.info(f"[LLM Pairs] After word replacement: '{text}'")
+        
+        # Step 5c: Process acronyms — wrap in 【bracketed pronunciation】 with trailing comma
+        comma = ',,' if USE_DOUBLE_PUNCTUATION else ','
+        for acronym in acronyms:
+            pronunciation = spell_out_abbreviation(acronym)
+            if pronunciation:
+                # Trailing comma ensures TTS pause after acronym
+                bracket_text = f'【{pronunciation}】{comma}'
+                # Replace exact acronym (case-sensitive, word boundary)
+                text = re.sub(
+                    r'\b' + re.escape(acronym) + r'\b',
+                    bracket_text,
+                    text
+                )
+                logger.debug(f"[LLM Acronym] '{acronym}' → '{bracket_text}'")
+        logger.info(f"[LLM Acronyms] After acronym processing: '{text}'")
+
+    # Step 6: Process remaining {{SPELL}} markers and spell_out_set fallback → 【bracketed pronunciation】
     text = process_spell_out_markers(text, spell_out_set)
     logger.info(f"[Spell-out] Result: '{text}'")
 
-    # Step 6: Double punctuation (experimental)
+    # Step 7: Double punctuation (experimental)
     # , → ,,   . → ..
     if USE_DOUBLE_PUNCTUATION:
         text = apply_double_punctuation(text)
 
-    # Step 7: Final punctuation cleanup
+    # Step 8: Final punctuation cleanup
     text = fix_punctuation_spacing(text, preserve_doubles=USE_DOUBLE_PUNCTUATION)
 
-    # Step 8: Sentence case
+    # Step 9: Sentence case
     text = normalize_sentence_case(text)
     logger.info(f"FINAL OUTPUT: '{text}'")
     

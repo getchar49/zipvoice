@@ -12,4 +12,6 @@ walkthrough.md
 implementation_plan*.md
 logs/
 app/normalizer/english_word_3_v3*.txt
+app/normalizer/learned_dict.json
 *.wav
+test_refactor.py

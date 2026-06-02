@@ -82,14 +82,78 @@ QUY TẮC:
    - Output chỉ chứa: chữ cái, số, dấu chấm, phẩy, khoảng trắng, {{SPELL}}...{{/SPELL}}.
 """
 
+# ── Extraction prompt (structured output mode) ───────────────────────────
+
+EXTRACTION_SYSTEM_PROMPT = """\
+You are an expert phonetician specializing in English-to-Vietnamese transliteration (Việt hóa). Your task is to analyze the user's text and perform two strict operations:
+
+1. ACRONYM EXTRACTION
+- Scan the text and extract true acronyms or initialisms (e.g., AWS, EC2, CI/CD, API).
+- STRICT EXCLUSION: Do not extract proper nouns, brand names, or software products from the technical lexicon (e.g., ignore "GitHub", "Actions", "Docker", "Kubernetes", "Linux").
+- An acronym must be an abbreviation formed from the initial letters of other words.
+- Format rule: Acronyms are typically fully uppercase (e.g., "AWS") or specific technical formats with symbols/numbers (e.g., "CI/CD", "EC2", "K8s").
+- Reject any standard Title Case or PascalCase words (e.g., reject "GitHub", reject "Actions").
+
+2. PHONETIC VIETNAMESE SPELLING (VIỆT HÓA)
+Extract ONLY the English words from the text and convert them into how they would be spelled phonetically using the Vietnamese alphabet.
+- STRICT LANGUAGE FILTER: Completely ignore any words that are already in Vietnamese (e.g., "kết", "nối", "giám", "sát"). Do not include them in the JSON output under any circumstances.
+- DO NOT translate the meaning of the word. You are spelling out how the English word SOUNDS using Vietnamese phonetics.
+- Use hyphens for multi-syllable words.
+- Ignore basic English grammar words (a, the, is, are, of, in, to, and). Focus on nouns, verbs, adjectives, and adverbs.
+
+Examples of the required phonetic conversion:
+- "gold" -> "gôn"
+- "car" -> "ka"
+- "production" -> "pờ rô đắc sần"
+- "standard" -> "xờ tăn đạt"
+- "line" -> "lai"
+
+OUTPUT FORMAT
+You must return the results exactly according to the provided JSON schema. Do not include any markdown formatting, conversational filler, or explanations.
+"""
+
+EXTRACTION_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "text_extraction_and_translation",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "acronyms": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of acronyms extracted from the text (e.g., WHO, NASA)."
+                },
+                "english_vietnamese_pairs": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "english_word": {"type": "string"},
+                            "vietnamese_spelling": {"type": "string"}
+                        },
+                        "required": ["english_word", "vietnamese_spelling"],
+                        "additionalProperties": False
+                    },
+                    "description": "Pairs of English words from the text and their Vietnamese spelling or translation."
+                }
+            },
+            "required": ["acronyms", "english_vietnamese_pairs"],
+            "additionalProperties": False
+        }
+    }
+}
+
 
 
 class LLMNormalizer:
     """Client to normalize text via LLM API.
 
-    Supports two modes:
+    Supports three modes:
     - Token batch mode (legacy): normalize_tokens_batch()
-    - Full-text mode (new): normalize_full_text()
+    - Full-text mode (legacy v2): normalize_full_text()
+    - Structured extraction mode (current): extract_acronyms_and_pairs()
     """
 
     def __init__(
@@ -108,27 +172,69 @@ class LLMNormalizer:
         # In-memory cache: token_string -> normalized_string
         self._cache: dict = {}
 
-    # ── Full-text normalization (new) ────────────────────────────────────
+    # ── Structured extraction (current) ────────────────────────────────
+
+    def extract_acronyms_and_pairs(self, text: str) -> dict:
+        """
+        Extract acronyms and English-Vietnamese phonetic pairs from text
+        using LLM with structured output (response_format).
+
+        Args:
+            text: Text already processed by rule-based normalizer + mapping_eng.
+
+        Returns:
+            Dict with keys:
+                - "acronyms": List[str] — acronyms found in text
+                - "english_vietnamese_pairs": List[dict] — each with
+                  "english_word" and "vietnamese_spelling"
+            Returns empty result on LLM failure.
+        """
+        empty_result = {"acronyms": [], "english_vietnamese_pairs": []}
+
+        if not text or not text.strip():
+            return empty_result
+
+        try:
+            response_text = self._call_llm(
+                user_prompt=text,
+                system_prompt=EXTRACTION_SYSTEM_PROMPT,
+                response_format=EXTRACTION_RESPONSE_FORMAT,
+            )
+
+            if not response_text or not response_text.strip():
+                logger.warning("LLM returned empty response for extraction")
+                return empty_result
+
+            # Parse JSON response
+            import json
+            result = json.loads(response_text.strip())
+
+            # Validate structure
+            if not isinstance(result, dict):
+                logger.warning(f"LLM extraction returned non-dict: {type(result)}")
+                return empty_result
+
+            acronyms = result.get("acronyms", [])
+            pairs = result.get("english_vietnamese_pairs", [])
+
+            if not isinstance(acronyms, list):
+                acronyms = []
+            if not isinstance(pairs, list):
+                pairs = []
+
+            logger.info(f"LLM extraction: {len(acronyms)} acronyms, {len(pairs)} pairs")
+            return {"acronyms": acronyms, "english_vietnamese_pairs": pairs}
+
+        except Exception as e:
+            logger.warning(f"LLM extraction failed, returning empty: {e}")
+            return empty_result
+
+    # ── Full-text normalization (legacy v2) ───────────────────────────────
 
     def normalize_full_text(self, text: str) -> str:
         """
-        Normalize an entire text passage via LLM in a single call.
-
-        The LLM handles:
-        - Vietnamese abbreviations → full form
-        - English spell-out abbreviations → {{SPELL}}ABC{{/SPELL}} markers
-        - Foreign words → Vietnamese phonetic approximation
-        - Special symbols → Vietnamese names
-        - Punctuation → only . and ,
-        - Math/science notation → Vietnamese reading
-
-        Args:
-            text: Text already processed by rule-based normalizer.
-
-        Returns:
-            Fully normalized text with {{SPELL}} markers for abbreviations
-            that need letter-by-letter pronunciation.
-            Falls back to original text on LLM failure.
+        (LEGACY) Normalize entire text via LLM in a single pass.
+        Kept for backward compatibility.
         """
         if not text or not text.strip():
             return text
@@ -139,13 +245,10 @@ class LLMNormalizer:
                 system_prompt=FULL_TEXT_SYSTEM_PROMPT,
             )
 
-            # Sanity checks
             if not response_text or not response_text.strip():
                 logger.warning("LLM returned empty response, falling back to original")
                 return text
 
-            # Check that response isn't suspiciously different in length
-            # (allow up to 3x expansion for abbreviation expansion)
             if len(response_text) > len(text) * 3:
                 logger.warning(
                     f"LLM response suspiciously long ({len(response_text)} vs {len(text)}), "
@@ -219,8 +322,15 @@ class LLMNormalizer:
 
     # ── LLM API call ─────────────────────────────────────────────────────
 
-    def _call_llm(self, user_prompt: str, system_prompt: str = None) -> str:
-        """Send a request to the LLM API with retry logic."""
+    def _call_llm(self, user_prompt: str, system_prompt: str = None,
+                  response_format: dict = None) -> str:
+        """Send a request to the LLM API with retry logic.
+        
+        Args:
+            user_prompt: The user message content.
+            system_prompt: System prompt (defaults to SYSTEM_PROMPT).
+            response_format: Optional response_format dict for structured output.
+        """
         if system_prompt is None:
             system_prompt = SYSTEM_PROMPT
 
@@ -233,6 +343,8 @@ class LLMNormalizer:
             "max_tokens": 4096,
             "temperature": 0.0,
         }
+        if response_format is not None:
+            payload["response_format"] = response_format
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",

@@ -547,3 +547,202 @@ def generate_sentence_with_brackets(
                 f"Audio: {wav_seconds:.2f}s, RTF: {metrics['rtf']:.4f}")
 
     return metrics
+
+
+@torch.inference_mode()
+def generate_sentence_with_brackets_cached(
+    save_path: str,
+    prompt_text: str,
+    prompt_wav_tensor: torch.Tensor,
+    prompt_rms: float,
+    prompt_features: torch.Tensor,
+    text: str,
+    model: torch.nn.Module,
+    vocoder: torch.nn.Module,
+    tokenizer,
+    feature_extractor,
+    device: torch.device,
+    num_step: int = 32,
+    guidance_scale: float = 1.0,
+    speed: float = 1.0,
+    sampling_rate: int = 24000,
+    max_duration: float = 100,
+    remove_long_sil: bool = False,
+    progress_cb: Optional[Callable[[int, int], None]] = None,
+    bracket_speed: float = 0.5,
+    bracket_num_step: int = 64,
+):
+    """
+    Cached version of generate_sentence_with_brackets.
+    
+    Uses pre-computed prompt tensors instead of file path,
+    eliminating N × load_prompt_wav() I/O for N segments.
+    
+    Falls back to generate_sentence_cached() for non-bracket text.
+    """
+    from app.cached_inference import generate_sentence_cached
+
+    # Parse segments
+    segments = parse_bracketed_text(text)
+    segments = merge_segments(segments)
+
+    # If no brackets, use standard cached generation
+    if not any(s.is_bracket for s in segments):
+        plain_text = " ".join(s.text for s in segments)
+        return generate_sentence_cached(
+            save_path=save_path,
+            prompt_text=prompt_text,
+            prompt_wav_tensor=prompt_wav_tensor,
+            prompt_rms=prompt_rms,
+            prompt_features=prompt_features,
+            text=plain_text,
+            model=model,
+            vocoder=vocoder,
+            tokenizer=tokenizer,
+            feature_extractor=feature_extractor,
+            device=device,
+            num_step=num_step,
+            guidance_scale=guidance_scale,
+            speed=speed,
+            sampling_rate=sampling_rate,
+            max_duration=max_duration,
+            remove_long_sil=remove_long_sil,
+            progress_cb=progress_cb,
+        )
+
+    import datetime as dt
+    import os
+
+    logger.info(f"[Bracket Cached] Parsed {len(segments)} segments: "
+                f"{sum(1 for s in segments if s.is_bracket)} bracket, "
+                f"{sum(1 for s in segments if not s.is_bracket)} normal")
+
+    start_t = dt.datetime.now()
+    segment_wavs: List[torch.Tensor] = []
+    total_segments = len(segments)
+    done_segments = 0
+
+    for i, seg in enumerate(segments):
+        word_count = len(seg.text.split()) if not seg.is_bracket else 0
+        is_short_normal = (not seg.is_bracket and word_count <= SHORT_SEGMENT_MAX_WORDS)
+
+        if seg.is_bracket or is_short_normal:
+            seg_speed = bracket_speed
+            seg_step = bracket_num_step
+        else:
+            seg_speed = speed
+            seg_step = num_step
+
+        seg_type = "BRACKET" if seg.is_bracket else ("SHORT" if is_short_normal else "NORMAL")
+
+        # Skip segments with no speakable content
+        speakable = re.sub(r'[\s.,;:!?…—–\-\'\"\(\)\[\]\{\}]', '', seg.text)
+        if not speakable:
+            done_segments += 1
+            continue
+
+        logger.info(f"[Bracket Cached] Segment {i+1}/{total_segments} "
+                     f"({seg_type}): '{seg.text[:50]}...' "
+                     f"speed={seg_speed}, step={seg_step}")
+
+        tmp_dir = os.path.dirname(save_path) or "."
+        tmp_path = os.path.join(tmp_dir, f"_bracket_seg_{i}_{os.getpid()}.wav")
+
+        try:
+            def segment_progress(done, total):
+                if progress_cb:
+                    overall = (done_segments + done / max(total, 1)) / max(total_segments, 1)
+                    progress_cb(int(overall * 100), 100)
+
+            generate_sentence_cached(
+                save_path=tmp_path,
+                prompt_text=prompt_text,
+                prompt_wav_tensor=prompt_wav_tensor,
+                prompt_rms=prompt_rms,
+                prompt_features=prompt_features,
+                text=seg.text,
+                model=model,
+                vocoder=vocoder,
+                tokenizer=tokenizer,
+                feature_extractor=feature_extractor,
+                device=device,
+                num_step=seg_step,
+                guidance_scale=guidance_scale,
+                speed=seg_speed,
+                sampling_rate=sampling_rate,
+                max_duration=max_duration,
+                remove_long_sil=remove_long_sil,
+                progress_cb=segment_progress,
+            )
+
+            wav, sr = torchaudio.load(tmp_path)
+            if sr != sampling_rate:
+                resampler = torchaudio.transforms.Resample(sr, sampling_rate)
+                wav = resampler(wav)
+
+            is_last_segment = (i == len(segments) - 1)
+            if is_last_segment:
+                wav = _normalize_segment_silence(
+                    wav, sampling_rate, gap_ms=0,
+                    trim_leading=True, trim_trailing=True,
+                )
+            else:
+                punct_type = _detect_trailing_punctuation(seg.text)
+                if punct_type == 'period':
+                    gap_ms = GAP_PERIOD_MS
+                elif punct_type == 'comma':
+                    gap_ms = GAP_COMMA_MS
+                else:
+                    gap_ms = GAP_NONE_MS
+                wav = _normalize_segment_silence(
+                    wav, sampling_rate, gap_ms=gap_ms,
+                    trim_leading=True, trim_trailing=True,
+                )
+
+            segment_wavs.append(wav)
+
+        except Exception as e:
+            logger.error(f"[Bracket Cached] Failed segment {i+1}: {e}")
+            done_segments += 1
+            continue
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+        done_segments += 1
+
+    # Cross-fade concatenate
+    if segment_wavs:
+        final_wav = cross_fade_concat(
+            segment_wavs, fade_duration=0.02, sample_rate=sampling_rate
+        )
+    else:
+        final_wav = torch.zeros(1, sampling_rate)
+
+    torchaudio.save(save_path, final_wav.cpu(), sample_rate=sampling_rate)
+
+    t = (dt.datetime.now() - start_t).total_seconds()
+    wav_seconds = final_wav.shape[-1] / sampling_rate
+    metrics = {
+        "t": t,
+        "t_no_vocoder": t,
+        "t_vocoder": 0.0,
+        "wav_seconds": wav_seconds,
+        "rtf": t / max(wav_seconds, 0.001),
+        "rtf_no_vocoder": t / max(wav_seconds, 0.001),
+        "rtf_vocoder": 0.0,
+    }
+
+    if progress_cb:
+        try:
+            progress_cb(100, 100)
+        except Exception:
+            pass
+
+    logger.info(f"[Bracket Cached] Done. Total time: {t:.2f}s, "
+                f"Audio: {wav_seconds:.2f}s, RTF: {metrics['rtf']:.4f}")
+
+    return metrics

@@ -28,8 +28,44 @@ def date_dmy2words(date):
     return date_str
 
 def replace_math_characters(input_str):
-    input_str = input_str.replace('²', ' bình phương ')
-    input_str = input_str.replace('π', ' pi ')
+    MATH_SYMBOLS = {
+        # Superscripts
+        '²': ' bình phương ',
+        '³': ' lập phương ',
+        # Math constants & operators
+        'π': ' pi ',
+        '√': ' căn bậc hai ',
+        '∞': ' vô cùng ',
+        '∑': ' tổng ',
+        # Comparison & relational operators
+        '≤': ' nhỏ hơn hoặc bằng ',
+        '≥': ' lớn hơn hoặc bằng ',
+        '≠': ' khác ',
+        '≈': ' xấp xỉ ',
+        # Arithmetic operators
+        '±': ' cộng trừ ',
+        '×': ' nhân ',
+        '÷': ' chia ',
+        '−': ' trừ ',           # Unicode minus U+2212 (different from ASCII hyphen-minus)
+        # Arrows
+        '→': ' suy ra ',
+        '←': ' ngược lại ',
+        '↔': ' tương đương ',
+        # Greek letters (commonly used in science/math)
+        'Δ': ' đen ta ',
+        'α': ' an pha ',
+        'β': ' bê ta ',
+        'γ': ' gam ma ',
+        'δ': ' đen ta ',
+        'θ': ' tê ta ',
+        'λ': ' lam đa ',
+        'μ': ' mu ',
+        'σ': ' xích ma ',
+        'φ': ' phi ',
+        'ω': ' ô mê ga ',
+    }
+    for symbol, replacement in MATH_SYMBOLS.items():
+        input_str = input_str.replace(symbol, replacement)
     return input_str
 
 def date_dm2words(date):

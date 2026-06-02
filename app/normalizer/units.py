@@ -1,3 +1,20 @@
+# Units where case matters (prefix m=mili vs M=Mega, b=bit vs B=Byte, etc.)
+# These units will be matched with EXACT case in norm_unit().
+# All other units in UNITS_DICT will be matched case-insensitively.
+CASE_SENSITIVE_UNITS = {
+	'KB', 'Mb', 'MB', 'Gb', 'GB', 'gb', 'TB',
+	'kHz', 'GHz', 'MHz', 'Hz',
+	'hPa', 'mPa', 'MPa', 'kPa', 'Pa', 'GPa',
+	'Nm',
+	'Mbps', 'Mb/s',
+	'mAh',
+	'kWh', 'kWp', 'kW', 'kV',
+	'Km2',
+	'Kg',
+	'VNĐ', 'vnđ',
+	'USD',
+}
+
 UNITS_DICT = { 
 	"bpm" : " nhịp trên phút ",
 	"nm/s" : " na nô mét trên giây ",
@@ -96,6 +113,13 @@ UNITS_DICT = {
 	'MHz':'mê ga héc',
 	'Hz':'héc',
 	'hPa':'héc tô pa xcan',
+	'GPa':'ghi ga pa xcan',
+	'MPa':'mê ga pa xcan',
+	'kPa':'ki lô pa xcan',
+	'mPa':'mi li pa xcan',
+	'Pa':'pa xcan',
+	'atm':'át mốt phia',
+	'bar':'ba',
  
 	# Units of data-rate 
 	'Mbps':'mê ga bít trên giây',
