@@ -1668,9 +1668,16 @@ class TextNormalizer():
     def norm_unit(self, input_str):
         out = input_str
         MULTIPLIERS = r'(?:chục|trăm|nghìn|ngàn|triệu|tỷ)'
-        PUNCT_CLASS = r'(?:\s|[.,;:)\]\}!?\-"\'…]|$)'
+        PUNCT_CLASS = r'(?:\s|[.,;:)\]\}!?\-"\'…/]|$)'
 
         for term, norm_term in UNITS_DICT.items():
+            # Entries containing '/' (e.g., "/năm", "USD/", "kWh/ngày", "m/s")
+            # are compound rate patterns — use simple string replacement
+            # since the number-prefix regex doesn't handle them correctly
+            if '/' in term or term.startswith('.'):
+                out = out.replace(term, norm_term)
+                continue
+
             term_esc = re.escape(term)  
             pattern = rf'(?P<num>[+-]?\d+(?:[.,]\d+)*)\s*(?P<mult>{MULTIPLIERS}\s*)?{term_esc}(?={PUNCT_CLASS})'
             prog = re.compile(pattern, re.IGNORECASE)

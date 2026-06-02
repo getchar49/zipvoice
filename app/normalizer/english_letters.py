@@ -66,3 +66,46 @@ def spell_out_abbreviation(abbr: str) -> str:
             # Multi-word: space is a natural separator, just continue
             pass
     return " ".join(parts)
+
+
+def spell_out_abbreviation_split(abbr: str):
+    """
+    Split an abbreviation into letter-part and digit-part pronunciations.
+
+    Letters are spelled out for bracket (slow) reading.
+    Trailing digits are spelled out for normal-speed reading outside brackets.
+
+    Args:
+        abbr: The abbreviation (e.g., "VS1", "S2", "TTS", "G")
+
+    Returns:
+        Tuple of (letter_pronunciation, digit_pronunciation).
+        Either may be empty string if there are no letters or no digits.
+
+    Examples:
+        >>> spell_out_abbreviation_split("VS1")
+        ('vi ét', 'một')
+        >>> spell_out_abbreviation_split("TTS")
+        ('ti ti ét', '')
+        >>> spell_out_abbreviation_split("S2")
+        ('ét', 'hai')
+        >>> spell_out_abbreviation_split("G")
+        ('ji', '')
+    """
+    letter_parts = []
+    digit_parts = []
+    # Process characters: once we hit a digit, all subsequent chars go to digit_parts
+    in_digits = False
+    for ch in abbr:
+        if ch == ' ':
+            continue
+        if ch.isdigit():
+            in_digits = True
+        if in_digits:
+            if ch in DIGIT_PRONUNCIATION:
+                digit_parts.append(DIGIT_PRONUNCIATION[ch])
+        else:
+            upper_ch = ch.upper()
+            if upper_ch in ENGLISH_LETTER_PRONUNCIATION:
+                letter_parts.append(ENGLISH_LETTER_PRONUNCIATION[upper_ch])
+    return " ".join(letter_parts), " ".join(digit_parts)

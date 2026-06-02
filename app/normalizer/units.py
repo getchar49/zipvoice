@@ -142,6 +142,8 @@ UNITS_DICT = {
 	'Kg':'ki lô gam',
 	'grams':'gờ ram',
 	'mg':'mi li gam',
+	'kWh' : ' ki lô goát giờ ',
+	'kWp' : ' ki lô goát pi ',
 	'kW':'ki lô goát',
     'kV': 'ki lô vôn',
  

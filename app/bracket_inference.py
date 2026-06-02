@@ -147,6 +147,64 @@ def parse_bracketed_text(text: str) -> List[TextSegment]:
     return cleaned
 
 
+def merge_segments(segments: List[TextSegment]) -> List[TextSegment]:
+    """
+    Post-process parsed segments to reduce total segment count.
+
+    Two optimizations:
+    1. Merge adjacent normal segments into one (reduces model calls).
+    2. Merge short normal segments (≤ SHORT_SEGMENT_MAX_WORDS words)
+       between two bracket segments into the surrounding brackets.
+       This avoids generating a tiny segment at slow speed separately.
+
+    Args:
+        segments: Parsed segments from parse_bracketed_text().
+
+    Returns:
+        Optimized list of segments with fewer total entries.
+    """
+    if len(segments) <= 1:
+        return segments
+
+    # Pass 1: Merge short normal segments between two brackets into the brackets
+    merged = []
+    i = 0
+    while i < len(segments):
+        seg = segments[i]
+
+        # Check if this is a short normal segment between two bracket segments
+        if (not seg.is_bracket
+                and i > 0 and i < len(segments) - 1
+                and merged and merged[-1].is_bracket
+                and segments[i + 1].is_bracket):
+            word_count = len(seg.text.split())
+            if word_count <= SHORT_SEGMENT_MAX_WORDS:
+                # Merge: append short text to previous bracket, then merge next bracket too
+                prev_bracket = merged[-1]
+                next_bracket = segments[i + 1]
+                prev_bracket.text = prev_bracket.text + ' ' + seg.text + ' ' + next_bracket.text
+                logger.debug(f"[Merge] Short normal '{seg.text}' merged between brackets → '{prev_bracket.text[:60]}...'")
+                i += 2  # skip the short normal and the next bracket
+                continue
+
+        merged.append(seg)
+        i += 1
+
+    # Pass 2: Merge adjacent normal segments
+    final = []
+    for seg in merged:
+        if (final
+                and not seg.is_bracket
+                and not final[-1].is_bracket):
+            # Merge with previous normal segment
+            final[-1].text = final[-1].text + ' ' + seg.text
+            logger.debug(f"[Merge] Adjacent normals merged → '{final[-1].text[:60]}...'")
+        else:
+            final.append(seg)
+
+    return final
+
+
 def has_brackets(text: str) -> bool:
     """Check if text contains any 【X】 bracket markers."""
     return bool(re.search(r'【[a-zA-Z\u00C0-\u1EF9][^】]{0,49}】', text))
@@ -303,6 +361,9 @@ def generate_sentence_with_brackets(
 
     # Parse segments
     segments = parse_bracketed_text(text)
+
+    # Merge segments to reduce total model calls
+    segments = merge_segments(segments)
 
     # If no brackets or only one segment, use standard generation
     if not any(s.is_bracket for s in segments):

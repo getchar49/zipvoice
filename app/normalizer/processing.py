@@ -3,7 +3,7 @@ from nltk import sent_tokenize
 from pathlib import Path
 from app.normalizer.normalizer import TextNormalizer
 from app.normalizer.abbre import ABBRE
-from app.normalizer.english_letters import spell_out_abbreviation
+from app.normalizer.english_letters import spell_out_abbreviation, spell_out_abbreviation_split
 import logging
 from datetime import datetime
 
@@ -135,19 +135,23 @@ def post_processing(text):
     return text
 
 
-def fix_punctuation_spacing(text):
+def fix_punctuation_spacing(text, preserve_doubles=False):
     """
     Final cleanup: fix spaces around punctuation marks.
     The rule-based normalizer inserts ' word ' padded replacements which
     creates artifacts like ' . ' and ' , ' with extra leading spaces.
+    
+    Args:
+        preserve_doubles: If True, skip collapsing ,, and .. (for double punctuation mode).
     """
     # Remove space BEFORE period/comma/semicolon/colon (but preserve 【】 brackets)
     text = re.sub(r'\s+([.,;:!?])', r'\1', text)
-    # Deduplicate consecutive punctuation: ,, → , and ,. → . (period wins)
+    # Deduplicate consecutive punctuation (skip when preserve_doubles is on)
     text = re.sub(r'[,;:]+\.', '.', text)       # comma-like + period → period
     text = re.sub(r'\.[,;:]+', '.', text)       # period + comma-like → period
-    text = re.sub(r',{2,}', ',', text)          # ,, → ,
-    text = re.sub(r'\.{2,}', '.', text)         # .. → .
+    if not preserve_doubles:
+        text = re.sub(r',{2,}', ',', text)      # ,, → ,
+        text = re.sub(r'\.{2,}', '.', text)     # .. → .
     # Ensure space AFTER period/comma/semicolon (when followed by a word char or bracket)
     text = re.sub(r'([.,;:!?])(?=[a-zA-Z\u00C0-\u1EF9【])', r'\1 ', text)
     # Collapse multiple spaces
@@ -343,11 +347,22 @@ def process_spell_out_markers(text: str, spell_out_set: set = None) -> str:
     
     def replace_spell_marker(match):
         abbr = match.group(1)
+        letter_pron, digit_pron = spell_out_abbreviation_split(abbr)
+        if letter_pron:
+            # Letters in brackets (slow speed), digits outside (normal speed)
+            result = f'【{letter_pron}】'
+            if digit_pron:
+                result += f' {digit_pron}'
+            logger.debug(f"Spell-out: '{abbr}' → '{result}'")
+            return result
+        elif digit_pron:
+            # Only digits, no letters — just return digits normally
+            return digit_pron
+        # fallback: use original spell_out_abbreviation
         pronunciation = spell_out_abbreviation(abbr)
         if pronunciation:
-            logger.debug(f"Spell-out: '{abbr}' → '【{pronunciation}】'")
             return f'【{pronunciation}】'
-        return abbr  # fallback: keep original if no pronunciation found
+        return abbr
     
     text = spell_pattern.sub(replace_spell_marker, text)
     
@@ -473,7 +488,7 @@ def normalize_vietnamese_text(text):
         text = apply_double_punctuation(text)
 
     # Step 7: Final punctuation cleanup
-    text = fix_punctuation_spacing(text)
+    text = fix_punctuation_spacing(text, preserve_doubles=USE_DOUBLE_PUNCTUATION)
 
     # Step 8: Sentence case
     text = normalize_sentence_case(text)
