@@ -477,7 +477,7 @@ def normalize_vietnamese_text(text):
         extraction = llm.extract_acronyms_and_pairs(text)
         
         acronyms = extraction.get("acronyms", [])
-        pairs = extraction.get("english_vietnamese_pairs", [])
+        pairs = extraction.get("foreign_vietnamese_pairs", [])
         
         logger.info(f"[LLM Extract] acronyms={acronyms}, pairs={len(pairs)} items")
         
@@ -485,9 +485,9 @@ def normalize_vietnamese_text(text):
         if pairs:
             dict_cache.update_pairs(pairs)
         
-        # Step 5b: Replace English words in text per LLM pairs
+        # Step 5b: Replace foreign words in text per LLM pairs
         for pair in pairs:
-            eng = pair.get("english_word", "")
+            eng = pair.get("foreign_word", "")
             vie = pair.get("vietnamese_spelling", "")
             if eng and vie:
                 text = re.sub(

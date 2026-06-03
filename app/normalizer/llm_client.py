@@ -15,6 +15,8 @@ Falls back gracefully if the LLM is unavailable.
 import logging
 import re
 import time
+import concurrent.futures
+import json
 from functools import lru_cache
 from typing import List, Tuple, Optional, Dict
 
@@ -85,65 +87,73 @@ QUY TẮC:
 # ── Extraction prompt (structured output mode) ───────────────────────────
 
 EXTRACTION_SYSTEM_PROMPT = """\
-You are an expert phonetician specializing in English-to-Vietnamese transliteration (Việt hóa). Your task is to analyze the user's text and perform two strict operations:
-
-1. ACRONYM EXTRACTION
-- Scan the text and extract true acronyms or initialisms (e.g., AWS, EC2, CI/CD, API).
-- STRICT EXCLUSION: Do not extract proper nouns, brand names, or software products from the technical lexicon (e.g., ignore "GitHub", "Actions", "Docker", "Kubernetes", "Linux").
-- An acronym must be an abbreviation formed from the initial letters of other words.
-- Format rule: Acronyms are typically fully uppercase (e.g., "AWS") or specific technical formats with symbols/numbers (e.g., "CI/CD", "EC2", "K8s").
+You are an expert phonetician specializing in Foreign-Language-to-Vietnamese transliteration (Việt hóa). Your task is to analyze the user's text and perform two strict operations:
+1. INITIALISM EXTRACTION (SPELLED-OUT ABBREVIATIONS ONLY)
+Scan the text and extract true initialisms (e.g., AWS, EC2, CI/CD, API, CEO). 
+- ONLY extract abbreviations where the letters are pronounced individually one-by-one (e.g., A-W-S, A-P-I).
+- STRICT EXCLUSION - PRONOUNCEABLE ACRONYMS: Do NOT extract abbreviations that are pronounced as fluid words (e.g., ignore "NASA", "BERT", "SCADA", "YOLO"). These must be routed to the Phonetic Spelling section.
+- STRICT EXCLUSION - PROPER NOUNS: Do not extract proper nouns, brand names, or software products from the technical lexicon (e.g., ignore "GitHub", "Actions", "Docker", "Kubernetes", "Linux").
+- Format rule: Initialisms can be lowercase or uppercase (api, CTO, CEO), they may have specific technical formats with symbols/numbers (e.g., "CI/CD", "EC2", "K8s"). 
 - Reject any standard Title Case or PascalCase words (e.g., reject "GitHub", reject "Actions").
 
 2. PHONETIC VIETNAMESE SPELLING (VIỆT HÓA)
-Extract ONLY the English words from the text and convert them into how they would be spelled phonetically using the Vietnamese alphabet.
+Extract ONLY the foreign (non-Vietnamese) words AND pronounceable acronyms from the text and convert them into how they would be spelled phonetically using the Vietnamese alphabet.
+- PROPER NOUN OVERRIDE: You MUST extract foreign proper nouns, brand names, company names, and software products (e.g., "Docker", "Linux", "Kubernetes", "GitHub") and convert them into phonetic Vietnamese spelling. Do not skip them.
+- PRONOUNCEABLE ACRONYMS: Include abbreviations here if they are spoken as a word rather than spelled out (e.g., "NASA" -> "na xa", "BERT" -> "bớt").
 - STRICT LANGUAGE FILTER: Completely ignore any words that are already in Vietnamese (e.g., "kết", "nối", "giám", "sát"). Do not include them in the JSON output under any circumstances.
-- DO NOT translate the meaning of the word. You are spelling out how the English word SOUNDS using Vietnamese phonetics.
-- Use hyphens for multi-syllable words.
-- Ignore basic English grammar words (a, the, is, are, of, in, to, and). Focus on nouns, verbs, adjectives, and adverbs.
+- DO NOT translate the meaning of the word. You are spelling out how the foreign word SOUNDS in its native language using Vietnamese phonetics.
+- DO NOT use hyphens for multi-syllable words ("mơ xin", "đi zi tồ") under any circumstances.
 
-Examples of the required phonetic conversion:
-- "gold" -> "gôn"
-- "car" -> "ka"
-- "production" -> "pờ rô đắc sần"
-- "standard" -> "xờ tăn đạt"
-- "line" -> "lai"
+Examples of the required phonetic conversion across different languages, acronyms, and tech brands:
+- [English] "production" -> "pờ rô đắc sừn"
+- [English] "standard" -> "xờ ten đợt"
+- [French] "croissant" -> "cờ roát xăng"
+- [Japanese] "sushi" -> "su xi"
+- [Russian] "vodka" -> "vốt ca"
+- [Acronym] "NASA" -> "na xa"
+- [Acronym] "BERT" -> "bớt"
+- [Acronym] "SCADA" -> "xca đa"
+- [Tech Brand] "Docker" -> "đốc cơ"
+- [Tech Brand] "Kubernetes" -> "ku bơ nê tê xơ"
+- [Tech Brand] "Linux" -> "li nức"
+- [Tech Brand] "GitHub" -> "gít hắp"
 
 OUTPUT FORMAT
 You must return the results exactly according to the provided JSON schema. Do not include any markdown formatting, conversational filler, or explanations.
 """
 
 EXTRACTION_RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "text_extraction_and_translation",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "acronyms": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "acronyms_extraction_and_convert_to_viet_spelling",
+                "strict": True,
+                "schema": {
+                "type": "object",
+                "properties": {
+                    "acronyms": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": { "type": "string" },
                     "description": "List of acronyms extracted from the text (e.g., WHO, NASA)."
-                },
-                "english_vietnamese_pairs": {
+                    },
+                    "foreign_vietnamese_pairs": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "english_word": {"type": "string"},
-                            "vietnamese_spelling": {"type": "string"}
+                        "foreign_word": { "type": "string" },
+                        "vietnamese_spelling": { "type": "string" }
                         },
-                        "required": ["english_word", "vietnamese_spelling"],
+                        "required": ["foreign_word", "vietnamese_spelling"],
                         "additionalProperties": False
                     },
-                    "description": "Pairs of English words from the text and their Vietnamese spelling or translation."
+                    "description": "Pairs of Foreign words from the text and their Vietnamese spelling."
+                    }
+                },
+                "required": ["acronyms", "foreign_vietnamese_pairs"],
+                "additionalProperties": False
                 }
-            },
-            "required": ["acronyms", "english_vietnamese_pairs"],
-            "additionalProperties": False
+            }
         }
-    }
-}
 
 
 
@@ -172,11 +182,53 @@ class LLMNormalizer:
         # In-memory cache: token_string -> normalized_string
         self._cache: dict = {}
 
+    def _chunk_text(self, text: str, max_chars: int = 2500) -> List[str]:
+        """
+        Chia văn bản thành các chunk nhỏ dựa trên giới hạn max_chars.
+        Ưu tiên cắt theo đoạn văn, sau đó đến câu, và cuối cùng là từ
+        để không làm đứt gãy ngữ nghĩa hoặc cắt đôi một từ/viết tắt.
+        """
+        if len(text) <= max_chars:
+            return [text]
+
+        # Dùng regex để split nhưng vẫn giữ lại các ký tự phân cách
+        paragraphs = re.split(r'(\n+)', text)
+        chunks = []
+        current_chunk = ""
+
+        def add_to_chunks(segment):
+            nonlocal current_chunk
+            # Nếu thêm segment vào làm vượt quá max_chars và chunk hiện tại đã có nội dung
+            if len(current_chunk) + len(segment) > max_chars and current_chunk.strip():
+                chunks.append(current_chunk)
+                current_chunk = segment
+            else:
+                current_chunk += segment
+
+        for p in paragraphs:
+            if len(p) > max_chars:
+                # Nếu 1 đoạn văn quá dài, tiếp tục cắt theo câu
+                sentences = re.split(r'([.?!;:]\s+)', p)
+                for s in sentences:
+                    if len(s) > max_chars:
+                        # Nếu 1 câu quá dài, cắt theo khoảng trắng (từ)
+                        words = re.split(r'(\s+)', s)
+                        for w in words:
+                            add_to_chunks(w)
+                    else:
+                        add_to_chunks(s)
+            else:
+                add_to_chunks(p)
+
+        if current_chunk.strip():
+            chunks.append(current_chunk)
+
+        return chunks
     # ── Structured extraction (current) ────────────────────────────────
 
-    def extract_acronyms_and_pairs(self, text: str) -> dict:
+    def extract_acronyms_and_pairs(self, text: str, max_chars_per_chunk: int = 2500) -> dict:
         """
-        Extract acronyms and English-Vietnamese phonetic pairs from text
+        Extract acronyms and foreign-Vietnamese phonetic pairs from text
         using LLM with structured output (response_format).
 
         Args:
@@ -185,49 +237,79 @@ class LLMNormalizer:
         Returns:
             Dict with keys:
                 - "acronyms": List[str] — acronyms found in text
-                - "english_vietnamese_pairs": List[dict] — each with
-                  "english_word" and "vietnamese_spelling"
+                - "foreign_vietnamese_pairs": List[dict] — each with
+                  "foreign_word" and "vietnamese_spelling"
             Returns empty result on LLM failure.
         """
-        empty_result = {"acronyms": [], "english_vietnamese_pairs": []}
+        empty_result = {"acronyms": [], "foreign_vietnamese_pairs": []}
 
         if not text or not text.strip():
             return empty_result
 
-        try:
-            response_text = self._call_llm(
-                user_prompt=text,
-                system_prompt=EXTRACTION_SYSTEM_PROMPT,
-                response_format=EXTRACTION_RESPONSE_FORMAT,
-            )
+        # 1. Chia text thành các chunk an toàn
+        chunks = self._chunk_text(text, max_chars=max_chars_per_chunk)
+        
+        # Biến lưu trữ kết quả để khử trùng lặp
+        all_acronyms = set()
+        all_pairs_dict = {} # key: foreign_word, value: vietnamese_spelling
 
-            if not response_text or not response_text.strip():
-                logger.warning("LLM returned empty response for extraction")
+        # Hàm xử lý cho từng chunk
+        def process_chunk(chunk_text: str) -> dict:
+            if not chunk_text.strip():
+                return empty_result
+            try:
+                response_text = self._call_llm(
+                    user_prompt=chunk_text,
+                    system_prompt=EXTRACTION_SYSTEM_PROMPT,
+                    response_format=EXTRACTION_RESPONSE_FORMAT,
+                )
+                if not response_text or not response_text.strip():
+                    return empty_result
+                    
+                result = json.loads(response_text.strip())
+                if not isinstance(result, dict):
+                    return empty_result
+                return result
+            except Exception as e:
+                logger.warning(f"LLM extraction failed for chunk, skipping. Error: {e}")
                 return empty_result
 
-            # Parse JSON response
-            import json
-            result = json.loads(response_text.strip())
+        # 2. Xử lý song song các chunks (Max 5 workers hoặc bằng số lượng chunks để không spam API quá mức)
+        max_workers = min(5, max(1, len(chunks)))
+        logger.info(f"Splitting text into {len(chunks)} chunks, processing with {max_workers} workers.")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            chunk_results = list(executor.map(process_chunk, chunks))
 
-            # Validate structure
-            if not isinstance(result, dict):
-                logger.warning(f"LLM extraction returned non-dict: {type(result)}")
-                return empty_result
+        # 3. Gộp kết quả và khử trùng lặp
+        for res in chunk_results:
+            # Gộp Acronyms
+            acronyms = res.get("acronyms", [])
+            if isinstance(acronyms, list):
+                for acr in acronyms:
+                    if isinstance(acr, str) and acr.strip():
+                        all_acronyms.add(acr.strip())
+            
+            # Gộp Pairs
+            pairs = res.get("foreign_vietnamese_pairs", [])
+            if isinstance(pairs, list):
+                for pair in pairs:
+                    if isinstance(pair, dict):
+                        fw = pair.get("foreign_word")
+                        vs = pair.get("vietnamese_spelling")
+                        if fw and vs and isinstance(fw, str) and isinstance(vs, str):
+                            # Nếu từ ngoại ngữ xuất hiện nhiều lần, ta giữ bản dịch đầu tiên hoặc ghi đè (ở đây là ghi đè)
+                            all_pairs_dict[fw.strip()] = vs.strip()
 
-            acronyms = result.get("acronyms", [])
-            pairs = result.get("english_vietnamese_pairs", [])
+        final_acronyms = sorted(list(all_acronyms))
+        final_pairs = [{"foreign_word": k, "vietnamese_spelling": v} for k, v in all_pairs_dict.items()]
 
-            if not isinstance(acronyms, list):
-                acronyms = []
-            if not isinstance(pairs, list):
-                pairs = []
-
-            logger.info(f"LLM extraction: {len(acronyms)} acronyms, {len(pairs)} pairs")
-            return {"acronyms": acronyms, "english_vietnamese_pairs": pairs}
-
-        except Exception as e:
-            logger.warning(f"LLM extraction failed, returning empty: {e}")
-            return empty_result
+        logger.info(f"LLM extraction complete: {len(final_acronyms)} acronyms, {len(final_pairs)} pairs extracted.")
+        
+        return {
+            "acronyms": final_acronyms,
+            "foreign_vietnamese_pairs": final_pairs
+        }
 
     # ── Full-text normalization (legacy v2) ───────────────────────────────
 
