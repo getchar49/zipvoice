@@ -107,15 +107,15 @@ Extract ONLY the foreign (non-Vietnamese) words AND pronounceable acronyms from 
 Examples of the required phonetic conversion across different languages, acronyms, and tech brands:
 - [English] "production" -> "pờ rô đắc sừn"
 - [English] "standard" -> "xờ ten đợt"
-- [French] "croissant" -> "cờ roát xăng"
+- [French] "croissant" -> "cờ roa sòn"
 - [Japanese] "sushi" -> "su xi"
 - [Russian] "vodka" -> "vốt ca"
 - [Acronym] "NASA" -> "na xa"
 - [Acronym] "BERT" -> "bớt"
 - [Acronym] "SCADA" -> "xca đa"
 - [Tech Brand] "Docker" -> "đốc cơ"
-- [Tech Brand] "Kubernetes" -> "ku bơ nê tê xơ"
-- [Tech Brand] "Linux" -> "li nức"
+- [Tech Brand] "Kubernetes" -> "ku bơ nét"
+- [Tech Brand] "Linux" -> "li nắc"
 - [Tech Brand] "GitHub" -> "gít hắp"
 
 OUTPUT FORMAT
