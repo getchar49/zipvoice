@@ -71,12 +71,12 @@ class DictionaryCache:
         Add new English-Vietnamese pairs to the dictionary.
 
         Args:
-            pairs: List of dicts with keys "english_word" and "vietnamese_spelling".
+            pairs: List of dicts with keys "foreign_word" and "vietnamese_spelling".
         """
         with self._lock:
             added = 0
             for pair in pairs:
-                eng = pair.get("english_word", "").lower().strip()
+                eng = pair.get("foreign_word", "").lower().strip()
                 vie = pair.get("vietnamese_spelling", "").strip()
                 if eng and vie and eng not in self._dict:
                     self._dict[eng] = vie
